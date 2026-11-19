@@ -1,0 +1,7 @@
+Boot footsteps: original hard-floor recording "footstep-concrete.wav" by swuing.
+https://freesound.org/people/swuing/sounds/38873/
+Adapted and divided into individual steps by congusbongus for "Footsteps on different surfaces".
+https://opengameart.org/content/footsteps-on-different-surfaces
+Licensed under Creative Commons Attribution 3.0: https://creativecommons.org/licenses/by/3.0/
+North Tower uses boots/0.ogg through 8.ogg, high/low-pass filtered, trimmed, leveled,
+resampled to mono 24 kHz and imported as nine one-shots. Source authors do not endorse this project.

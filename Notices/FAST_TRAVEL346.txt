@@ -1,0 +1,15 @@
+3.4.6 地图快速旅行
+
+M 打开地图；鼠标选择金色休整点或右侧列表，W/S 或方向键切换已点亮的点，F/Enter 确认，M/Esc 取消。A/D 继续切换地图楼层。灰色休整点可在实地按 F 点亮。
+
+激活证据：3.4.6 由实际休整互动记录 ActivatedCheckpoints。旧档只沿用 VisitedCheckpoints 中通过休整写入的非1F位，以及 bPrisonRestActivated 这一明确的1F休整记录；旧版自动预置的1F位、主线进度、到过楼层、地图探索轮廓都不作为点亮证据。没有证明的点必须再次互动。新字段缺失时为0，存档格式编号和原进度位不变。
+
+旅行前重新核对点亮证据和通行剧情条件；战斗、雾门战斗准备、谜题、对白与撤离期间锁定。落点检查实际地面和完整身体空间，家具或阻挡会拒绝传送。旅行复用休整重建流程，恢复跟随同伴、探索镜头和到达楼层音乐，不授予胜利、钥匙、门、线索或新休整点。
+
+专项：ManosabaDuel.NorthTower.FastTravel（隔离 -DuelNorthTower -DuelNoSave；启用音频时另外核对到达BGM），以及既有 PointerMenus、Progress、NarrativeRuntime。
+
+地图实机专项：运行 ManosabaDuel.NorthTower.PointerMenus，增加 -DuelPointerMenuQA -DuelFastTravelUIQA -RenderOffscreen -DuelNorthTower -DuelNoSave，并以绝对 -UserDir 隔离；保留标题入口，不加 -DuelNoTitle。用 -DuelUICaptures 指定绝对截图目录。专项通过真实休整F互动点亮B1与1F，再检查鼠标行与地图图标选择、Enter和F确认、Esc取消、未点亮点没有旅行按钮，以及关闭后鼠标视角恢复。
+
+已验证：Verification/SmilePortraits/Engine.log 的 SmilePortraits 通过。Verification/FastTravelAudio/Engine.log 的 FastTravel 通过，实际启用48kHz双声道 AudioMixer，核对两条主角路线和全部五个休整点的到达曲目路由。该轮没有导出传送期间的混音录音。Verification/FastTravelUI/Engine.log 的真实键鼠地图专项通过，截图位于同目录 Captures；该轮发现的前室门拱遮挡已在后续代码中修正，最后复拍结果见后续记录。
+
+最终验证：Verification/TravelFinalDX12/Engine.log 中 FastTravel、PointerMenus、SmilePortraits 三项全部通过，使用正式 DX12 / SM6 / DisableAsyncCompute。全部10次双路线到达均有真实播放中、未暂停的音乐组件和已解码PCM；未导出混音WAV。1600×900实图在该目录 Captures：已到但未点亮的2F为灰色且不可选，B1到达镜头保留在前室内，同伴在地面跟随。初次相机断言误用人物脚底定位器的失败记录保留在 FastTravelCamera；改为房间完整包围盒后通过最终回归。

@@ -1,0 +1,24 @@
+{
+  "seed": 34663103,
+  "galaxy_plane_endpoints_yaw_elevation": [
+    [
+      -30,
+      -4
+    ],
+    [
+      30,
+      38
+    ]
+  ],
+  "galaxy_core_yaw_elevation": [
+    -9,
+    15.2
+  ],
+  "garden_default_pitch_degrees": 2,
+  "authorship": "Original deterministic procedural game art; no observed star catalogue or external galaxy photograph.",
+  "runtime": "4K equirectangular star field; 1K periodic cloud density; one opaque sky sphere and one translucent cloud sphere; no runtime noise octaves or volumetric clouds.",
+  "files": {
+    "MilkyWay346.png": "3217f7c42c8222fc13a60b3e38077314f9d57842aec2941e636b87849f1bdb27",
+    "CloudField346.png": "153a1e5762cc5825292b55afaa35ca9535fd6d81024ff6ce5e34a071ba81e9c1"
+  }
+}

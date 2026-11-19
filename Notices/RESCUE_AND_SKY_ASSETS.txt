@@ -1,0 +1,28 @@
+Additional rescue and sky assets — 2026-11-19
+
+Light Helicopter, tevy, v1 (2026-10-27)
+Source: https://tevy.dev/models/light-helicopter
+Pinned source: https://tevy.dev/models/light-helicopter/v1/lod0.glb
+71,420 triangles. Converted to UE centimetres; rear left cabin door opened; fuselage and both rotors imported separately with original PBR textures.
+
+Airport Control Tower, tevy, v2 (2026-11-06)
+Source: https://tevy.dev/models/control-tower
+Pinned source: https://tevy.dev/models/control-tower/v2/lod0.glb
+19,280 triangles. Used at original scale on the offshore rescue-station island.
+
+Both tevy models and their supplied textures are dedicated under CC0 1.0 Universal.
+License: https://creativecommons.org/publicdomain/zero/1.0/
+The dedication permits reuse, modification and redistribution, including commercial use, without mandatory attribution. Source attribution is retained here for provenance.
+
+Moon texture: CGI Moon Kit, lroc_color_2k.jpg (2025 color map).
+Credit: NASA's Scientific Visualization Studio; LRO/LROC instrument teams.
+Source: https://svs.gsfc.nasa.gov/4720/
+File: https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720/lroc_color_2k.jpg
+NASA media guidelines: https://www.nasa.gov/nasa-brand-center/images-and-media/
+Used as a lunar surface map in the game sky. NASA is acknowledged as the source; this game has no NASA affiliation or endorsement.
+
+Cloud/noise and sea-normal textures, custody fixtures, rescue target markings and island support geometry were procedurally authored for this project, seed 63103. Their world placement and atmospheric appearance are artistic choices.
+
+Original downloads, hashes, derived-mesh dimensions and conversion/import receipts:
+Verification/EnvironmentUpgrade/source_manifest.json
+Verification/EnvironmentUpgrade/unreal_import_report.json

@@ -1,0 +1,1800 @@
+#include "DuelGame.h"
+#include "GameFramework/CharacterMovementComponent.h"
+
+#include "Algo/BinarySearch.h"
+#include "Camera/CameraActor.h"
+#include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
+#include "CanvasItem.h"
+#include "DuelArena.h"
+#include "DuelHudFont.h"
+#include "DuelProgress.h"
+#include "Engine/Canvas.h"
+#include "Engine/Texture2D.h"
+#include "Engine/World.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
+#include "Kismet/KismetSystemLibrary.h"
+
+namespace
+{
+    constexpr const TCHAR* CheckpointSlot = TEXT("MissingTestimonyCheckpoint");
+
+    const FLinearColor Ink(.012f, .014f, .020f, .91f);
+    const FLinearColor Ivory(.89f, .83f, .71f);
+    const FLinearColor Ash(.64f, .68f, .72f);
+    const FLinearColor Bronze(.68f, .42f, .20f);
+    const FLinearColor Ember(.94f, .66f, .34f);
+    const FLinearColor Oxblood(.59f, .071f, .114f);
+    const FLinearColor Moss(.26f, .51f, .35f);
+    const FLinearColor Cerulean(.16f, .34f, .64f);
+    const FLinearColor Sakura(.70f, .21f, .44f);
+}
+
+ADuelMode::ADuelMode()
+{
+    PrimaryActorTick.bCanEverTick = true;
+    DefaultPawnClass = ADuelFighter::StaticClass();
+    HUDClass = ADuelHUD::StaticClass();
+}
+
+void ADuelMode::StartPlay()
+{
+    Arena = GetWorld()->SpawnActor<ADuelArena>();
+    BossFighter = SpawnBoss(FirstBoss);
+    if (APlayerController* Controller = GetWorld()->GetFirstPlayerController())
+    {
+        if (!Controller->GetPawn())
+        {
+            RestartPlayer(Controller);
+        }
+        PlayerFighter = Cast<ADuelFighter>(Controller->GetPawn());
+    }
+    LinkFighters();
+    Super::StartPlay();
+    ReturnToCheckpoint();
+    if (FApp::CanEverRender() && !FParse::Param(FCommandLine::Get(), TEXT("DuelNoTitle")))
+    {
+        Result = EDuelOutcome::Title;
+        MenuSelection = CanContinue() ? 0 : 1;
+    }
+}
+
+void ADuelMode::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    if (!PlayerFighter || UGameplayStatics::IsGamePaused(this))
+    {
+        return;
+    }
+    const FVector At = PlayerFighter->GetActorLocation();
+    const FVector Local = At - Arena->CourtOrigin();
+    if (Result == EDuelOutcome::Ready && bGateOpen && Local.X >= DuelCourt::GateCrossX && FMath::Abs(Local.Y) < 244.f)
+    {
+        ResetEncounter(true);
+    }
+    else if (Result == EDuelOutcome::Victory && !bYukiCourt &&
+        Local.X >= DuelCourt::ArchiveEntryX - 74.f && FMath::Abs(Local.Y) < 230.f)
+    {
+        EnterArchive();
+    }
+    else if (Result == EDuelOutcome::Passage && At.X >= DuelCourt::PassageTurn.X - 175.f && At.Y >= -164.f)
+    {
+        EnterAppeal();
+    }
+    else if (Result == EDuelOutcome::Archive && bAppeal && RitualComplete() && !bReadingArchive &&
+        Local.X >= DuelCourt::YukiArchiveExitX && FMath::Abs(Local.Y) < 275.f)
+    {
+        EnterYukiCourt();
+    }
+    else if (Result == EDuelOutcome::Victory && bYukiCourt && Local.X >= DuelCourt::YukiGardenX &&
+        FMath::Abs(Local.Y) < 250.f)
+    {
+        FinishTrial();
+    }
+    if (Result == EDuelOutcome::Epilogue && bCompanionFollowing && RescuedFighter && !bReadingArchive)
+    {
+        const FVector Forward = PlayerFighter->GetActorForwardVector();
+        const FVector Side = FVector::CrossProduct(FVector::UpVector, Forward);
+        const FVector Goal = At - Forward * 155.f + Side * 99.f;
+        const FVector Origin = DuelCourt::YukiOrigin;
+        const FVector SafeGoal(FMath::Clamp(Goal.X, Origin.X + DuelCourt::YukiGardenX - 35.f, Origin.X + 4330.f),
+            FMath::Clamp(Goal.Y, -830., 830.), Goal.Z);
+        const FVector Offset = SafeGoal - RescuedFighter->GetActorLocation();
+        if (Offset.SizeSquared2D() > FMath::Square(58.f))
+        {
+            const FVector Direction = Offset.GetSafeNormal2D();
+            RescuedFighter->FaceDirection(Direction, DeltaSeconds);
+            RescuedFighter->AddMovementInput(Direction, FMath::Clamp((Offset.Size2D() - 53.) / 142., .23, 1.), true);
+        }
+    }
+}
+
+void ADuelMode::RestartPlayer(AController* NewPlayer)
+{
+    if (!IsValid(NewPlayer))
+    {
+        return;
+    }
+    RestartPlayerAtTransform(NewPlayer, DuelCourt::Start(false));
+    PlayerFighter = Cast<ADuelFighter>(NewPlayer->GetPawn());
+    LinkFighters();
+}
+
+void ADuelMode::LinkFighters()
+{
+    if (IsValid(PlayerFighter) && IsValid(BossFighter) && IsValid(Arena))
+    {
+        PlayerFighter->SetEncounter(BossFighter, Arena);
+        BossFighter->SetEncounter(PlayerFighter, Arena);
+    }
+}
+
+ADuelFighter* ADuelMode::SpawnBoss(EDuelCharacter Character)
+{
+    const FTransform Start = DuelCourt::Start(true, Arena->CourtOrigin());
+    ADuelFighter* Fighter = GetWorld()->SpawnActorDeferred<ADuelFighter>(ADuelFighter::StaticClass(), Start,
+        nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+    if (Fighter)
+    {
+        Fighter->ConfigureBoss(Character);
+        Fighter->FinishSpawning(Start);
+        Fighter->SetActorTransform(Start, false, nullptr, ETeleportType::TeleportPhysics);
+    }
+    return Fighter;
+}
+
+void ADuelMode::SetBoss(EDuelCharacter Character)
+{
+    if (BossFighter && BossFighter->SelectCharacter(Character))
+    {
+        return;
+    }
+    ADuelFighter* Next = SpawnBoss(Character);
+    if (Next)
+    {
+        if (BossFighter)
+        {
+            BossFighter->Destroy();
+        }
+        BossFighter = Next;
+        LinkFighters();
+    }
+}
+
+void ADuelMode::RescueBoss()
+{
+    BossFighter->BossPhase = 1;
+    BossFighter->FormProgress = 0.f;
+    BossFighter->Health = DuelCourt::BossMaxHealth;
+    BossFighter->ShowCharacterForm(true);
+    Arena->RitualTrace(BossFighter->GetActorLocation(), false);
+    Arena->SetBattlePhase(1);
+}
+
+void ADuelMode::FighterFell(const ADuelFighter* Fighter)
+{
+    if (Result != EDuelOutcome::Fighting || !PlayerFighter || !BossFighter || (Fighter != PlayerFighter && Fighter != BossFighter))
+    {
+        return;
+    }
+    Result = Fighter == BossFighter ? EDuelOutcome::Victory : EDuelOutcome::Defeat;
+    CompletedDuelSeconds = FMath::Max(1, FMath::RoundToInt(GetWorld()->GetTimeSeconds() - DuelStartedAt));
+    MenuSelection = 0;
+    bCompanionFollowing = false;
+    PlayerFighter->EndCombat();
+    BossFighter->EndCombat();
+    if (Result == EDuelOutcome::Victory)
+    {
+        BossFighter->SetActorEnableCollision(false);
+    }
+    if (Arena)
+    {
+        Arena->SetCombatCamera(false);
+        Arena->ClearCombatEffects();
+        Arena->Sound(Result == EDuelOutcome::Victory ? EDuelSound::Victory : EDuelSound::Defeat,
+            Fighter->GetActorLocation());
+        if (Result == EDuelOutcome::Defeat)
+        {
+            const bool bSpoken = Arena->TryBossLine(BossFighter->SelectedCharacter(), EDuelVoice::Defeat, BossFighter->GetActorLocation());
+            SubtitleUntil = !bSpoken ? GetWorld()->GetTimeSeconds() + 6.1 : 0.0;
+        }
+        if (Result == EDuelOutcome::Victory)
+        {
+            if (bYukiCourt)
+            {
+                Arena->SetDawn(true);
+            }
+            else
+            {
+                RescueBoss();
+                Arena->SetArchiveGateOpen(true);
+            }
+            PlayerFighter->PrepareExploration();
+        }
+    }
+}
+
+void ADuelMode::BeginEncounter()
+{
+    if (Result == EDuelOutcome::Ready && NearGate())
+    {
+        bGateOpen = true;
+        Arena->SetGateClosed(false);
+        Arena->Sound(EDuelSound::VerdictBell, Arena->CourtOrigin() + FVector(1790, 0, 532));
+    }
+}
+
+bool ADuelMode::NearGate() const
+{
+    if (!PlayerFighter || FigureView != 0 || bGateOpen || Result != EDuelOutcome::Ready ||
+        (!bAppeal && !bPrisonGateOpen))
+    {
+        return false;
+    }
+    const FVector At = PlayerFighter->GetActorLocation() - Arena->CourtOrigin();
+    return At.X >= (bAppeal && !bYukiCourt ? DuelCourt::AppealRampEndX - 28.f : DuelCourt::GateX - 235.f) &&
+        At.X < DuelCourt::GateX && FMath::Abs(At.Y) < 208.f && At.Z < 146.f;
+}
+
+bool ADuelMode::NearPrisonGate() const
+{
+    if (Result != EDuelOutcome::Ready || FigureView != 0 || bAppeal || bPrisonGateOpen || !PlayerFighter)
+    {
+        return false;
+    }
+    const FVector At = PlayerFighter->GetActorLocation();
+    return At.X >= DuelCourt::PrisonGateX - 232.f && At.X <= DuelCourt::PrisonGateX &&
+        FMath::Abs(At.Y) < 200.f && At.Z < 146.f;
+}
+
+bool ADuelMode::NearWarrant() const
+{
+    return Result == EDuelOutcome::Ready && FigureView == 0 && !bAppeal && !bWarrantFound && PlayerFighter &&
+        FVector::DistSquared2D(PlayerFighter->GetActorLocation(), DuelCourt::Warrant) < FMath::Square(178.f);
+}
+
+bool ADuelMode::NearArchiveDesk() const
+{
+    return Result == EDuelOutcome::Archive && PlayerFighter &&
+        (!bAppeal || PlayerFighter->GetActorLocation().Z >= Arena->CourtOrigin().Z + DuelCourt::VerdictRise + 38.f) &&
+        FVector::DistSquared2D(PlayerFighter->GetActorLocation() - Arena->CourtOrigin(),
+            FVector(bAppeal ? DuelCourt::VerdictDeskX : DuelCourt::ArchiveDeskX, 0, 0)) <= FMath::Square(247.f);
+}
+
+bool ADuelMode::NearAppealPassage() const
+{
+    return Result == EDuelOutcome::Archive && !bAppeal && !bReadingArchive && Decision != EDuelEnding::Undecided &&
+        PlayerFighter && FVector::DistSquared2D(PlayerFighter->GetActorLocation(), DuelCourt::AppealPassage) < FMath::Square(208.f);
+}
+
+const TCHAR* ADuelMode::AreaName() const
+{
+    if (bYukiCourt)
+    {
+        if (Result == EDuelOutcome::Epilogue)
+        {
+            return TEXT("晴庭");
+        }
+        return Result == EDuelOutcome::Ready ? TEXT("裁决回廊") : TEXT("终审庭");
+    }
+    if (Result == EDuelOutcome::Passage)
+    {
+        return TEXT("证人回廊");
+    }
+    if (Result == EDuelOutcome::Archive)
+    {
+        return bAppeal ? TEXT("复审席") : TEXT("封存证物库");
+    }
+    if (Result == EDuelOutcome::Fighting || Result == EDuelOutcome::Victory)
+    {
+        return bAppeal ? TEXT("复审礼堂") : TEXT("审讯庭");
+    }
+    if (bAppeal)
+    {
+        return TEXT("证人通道");
+    }
+    const double X = PlayerFighter->GetActorLocation().X;
+    if (X < DuelCourt::StairBaseX)
+    {
+        return TEXT("沉水门房");
+    }
+    if (X < DuelCourt::StairTopX)
+    {
+        return TEXT("押送阶梯");
+    }
+    return X < DuelCourt::PrisonGateX ? TEXT("禁闭回廊") : TEXT("监牢外廊");
+}
+
+bool ADuelMode::CanExplore() const
+{
+    return (Result == EDuelOutcome::Ready && FigureView == 0) ||
+        Result == EDuelOutcome::Victory || Result == EDuelOutcome::Passage ||
+        (Result == EDuelOutcome::Epilogue && !bReadingArchive) ||
+        (Result == EDuelOutcome::Archive && !bReadingArchive);
+}
+
+void ADuelMode::EnterArchive()
+{
+    const FVector Origin = Arena->CourtOrigin();
+    Result = EDuelOutcome::Archive;
+    Arena->Sound(EDuelSound::RainAtlas, Origin + FVector(bAppeal ? DuelCourt::VerdictDeskX : DuelCourt::ArchiveDeskX, 0,
+        170.f + (bAppeal ? DuelCourt::VerdictRise : 0.f)));
+}
+
+void ADuelMode::EnterAppeal()
+{
+    const EDuelCharacter Next = BossFighter->SelectedCharacter() == EDuelCharacter::Ema ? EDuelCharacter::Hiro : EDuelCharacter::Ema;
+    if (!BossFighter->SelectCharacter(Next))
+    {
+        return;
+    }
+    FirstDuelSeconds = CompletedDuelSeconds;
+    FirstBoss = BossFighter->SelectedCharacter() == EDuelCharacter::Ema ? EDuelCharacter::Hiro : EDuelCharacter::Ema;
+    bAppeal = true;
+    bAppealRested = false;
+    Arena->SetAppeal(true);
+    BossFighter->ResetFighter();
+    BossFighter->EndCombat();
+    Result = EDuelOutcome::Ready;
+    bGateOpen = false;
+    Arena->SetGateClosed(true);
+    Arena->SetArchiveGateOpen(false);
+    PlayerFighter->PrepareExploration();
+    Arena->Sound(EDuelSound::VerdictBell, DuelCourt::AppealOrigin + FVector(-2600, 0, 300));
+}
+
+void ADuelMode::EnterYukiCourt()
+{
+    SecondDuelSeconds = CompletedDuelSeconds;
+    bYukiCourt = true;
+    bGateOpen = false;
+    Result = EDuelOutcome::Ready;
+    Arena->SetYukiCourt(true);
+    Arena->SetGateClosed(true);
+    SetBoss(EDuelCharacter::Yuki);
+    BossFighter->EndCombat();
+    Arena->SetCombatCamera(false);
+    Arena->Sound(EDuelSound::VerdictBell, DuelCourt::YukiCheckpoint().GetLocation());
+    PlayerFighter->RestAtCheckpoint();
+    WriteCheckpoint();
+}
+
+void ADuelMode::FinishTrial(bool bFollow)
+{
+    Result = EDuelOutcome::Epilogue;
+    bReadingArchive = false;
+    MenuSelection = 0;
+    bCompanionFollowing = bFollow;
+    PlayerFighter->EndCombat();
+    PlayerFighter->RestAtCheckpoint();
+    Arena->SetDawn(true);
+    if (!RescuedFighter)
+    {
+        const EDuelCharacter Partner = PlayerFighter->SelectedCharacter() == EDuelCharacter::Hiro ? EDuelCharacter::Ema : EDuelCharacter::Hiro;
+        RescuedFighter = SpawnBoss(Partner);
+    }
+    if (RescuedFighter)
+    {
+        RescuedFighter->ShowCharacterForm(true);
+        RescuedFighter->EndCombat();
+        RescuedFighter->GetCharacterMovement()->bRunPhysicsWithNoController = true;
+        RescuedFighter->GetCharacterMovement()->MaxWalkSpeed = 550.f;
+        RescuedFighter->SetActorLocationAndRotation(DuelCourt::YukiOrigin + FVector(3275, 190, 103), FRotator(0, 202, 0));
+    }
+    Arena->Sound(EDuelSound::Victory, DuelCourt::YukiOrigin + FVector(3300, 0, 150));
+    WriteCheckpoint();
+}
+
+bool ADuelMode::NearGardenExit() const
+{
+    return Result == EDuelOutcome::Epilogue && PlayerFighter &&
+        RescuedFighter && FVector::DistSquared2D(PlayerFighter->GetActorLocation(), RescuedFighter->GetActorLocation())
+            <= FMath::Square(310.f);
+}
+
+bool ADuelMode::SilentBellActive() const
+{
+    return bYukiCourt && Result == EDuelOutcome::Fighting && BossFighter->Move == EDuelMove::SilentBell &&
+        BossFighter->MoveAge <= 1.95f;
+}
+
+bool ADuelMode::CanContinue() const
+{
+    return UGameplayStatics::DoesSaveGameExist(CheckpointSlot, 0);
+}
+
+bool ADuelMode::NearRestPoint() const
+{
+    if (Result != EDuelOutcome::Ready || !PlayerFighter || FigureView != 0 || (!bAppeal && !bPrisonGateOpen))
+    {
+        return false;
+    }
+    const FVector At = bYukiCourt ? DuelCourt::YukiCheckpoint().GetLocation() :
+        bAppeal ? DuelCourt::AppealCheckpoint().GetLocation() : DuelCourt::Checkpoint().GetLocation();
+    return FVector::DistSquared2D(PlayerFighter->GetActorLocation(), At) <= FMath::Square(167.f);
+}
+
+int32 ADuelMode::RitualMark() const
+{
+    if (!bAppeal || Result != EDuelOutcome::Archive || bReadingArchive || RitualComplete())
+    {
+        return INDEX_NONE;
+    }
+    const FVector At = Arena->CourtOrigin() + DuelCourt::RitualMarks[RitualSeal];
+    return FVector::DistSquared2D(PlayerFighter->GetActorLocation(), At) <= FMath::Square(131.f) ? RitualSeal : INDEX_NONE;
+}
+
+float ADuelMode::RitualCaptionOpacity() const
+{
+    return FMath::SmoothStep(0.f, .72f, static_cast<float>(RitualAt + 5.2 - GetWorld()->GetTimeSeconds()));
+}
+
+void ADuelMode::WriteCheckpoint()
+{
+    if (!FApp::CanEverRender() || FParse::Param(FCommandLine::Get(), TEXT("DuelNoSave")))
+    {
+        return;
+    }
+    UDuelProgress* Save = NewObject<UDuelProgress>(this);
+    Save->bAppeal = bAppeal;
+    Save->bYukiCourt = bYukiCourt;
+    Save->bFinished = Result == EDuelOutcome::Epilogue;
+    Save->bCompanionFollowing = bCompanionFollowing;
+    Save->Character = static_cast<uint8>(PlayerFighter->SelectedCharacter());
+    const EDuelCharacter Boss = BossFighter->SelectedCharacter();
+    Save->FirstBoss = static_cast<uint8>(bAppeal ? FirstBoss : Boss);
+    Save->Evidence = static_cast<uint8>(Decision);
+    Save->Right = static_cast<uint8>(PlayerFighter->Equipped);
+    Save->Left = static_cast<uint8>(PlayerFighter->Offhand);
+    Save->RightReserve = static_cast<uint8>(PlayerFighter->RightReserve);
+    Save->LeftReserve = static_cast<uint8>(PlayerFighter->LeftReserve);
+    Save->Art = static_cast<uint8>(PlayerFighter->ArtSelection);
+    Save->Spell = static_cast<uint8>(PlayerFighter->SelectedSpell());
+    for (const EDuelArt Spell : PlayerFighter->PreparedSpells)
+    {
+        Save->StaffSpells.Add(static_cast<uint8>(Spell));
+    }
+    Save->ActiveSpellSlot = static_cast<uint8>(PlayerFighter->SpellSlot());
+    Save->BloodFlasks = PlayerFighter->HealthFlaskAllocation;
+    Save->FlaskBudget = DuelCourt::TotalFlasks;
+    Save->FirstFight = FirstDuelSeconds;
+    Save->SecondFight = SecondDuelSeconds;
+    Save->FinalFight = Save->bFinished ? CompletedDuelSeconds : 0;
+    if (!UGameplayStatics::SaveGameToSlot(Save, CheckpointSlot, 0))
+    {
+        UE_LOG(LogTemp, Error, TEXT("Could not save the witch trial checkpoint"));
+    }
+}
+
+void ADuelMode::LoadCheckpoint()
+{
+    const UDuelProgress* Save = Cast<UDuelProgress>(UGameplayStatics::LoadGameFromSlot(CheckpointSlot, 0));
+    if (!Save)
+    {
+        ReturnToCheckpoint();
+        return;
+    }
+    const EDuelCharacter PlayerCharacter = Save->Character == 1 ? EDuelCharacter::Ema : EDuelCharacter::Hiro;
+    PlayerFighter->SelectCharacter(PlayerCharacter);
+    const auto Equip = [PlayerCharacter](uint8 Value, EDuelHand Hand, EDuelWeapon Fallback)
+    {
+        const EDuelWeapon Gear = static_cast<EDuelWeapon>(Value);
+        return DuelCourt::CanEquip(Gear, PlayerCharacter, Hand) ? Gear : Fallback;
+    };
+    PlayerFighter->SetWeapon(Equip(Save->Right, EDuelHand::Right, EDuelWeapon::Rapier));
+    PlayerFighter->SetWeapon(Equip(Save->Left, EDuelHand::Left, EDuelWeapon::Buckler), EDuelHand::Left);
+    PlayerFighter->RightReserve = Equip(Save->RightReserve, EDuelHand::Right, EDuelWeapon::Greatblade);
+    PlayerFighter->LeftReserve = Equip(Save->LeftReserve, EDuelHand::Left, EDuelWeapon::Spear);
+    const EDuelArt Art = static_cast<EDuelArt>(Save->Art);
+    PlayerFighter->ArtSelection = DuelCourt::SupportsArt(Art, PlayerCharacter) ? Art : EDuelArt::Default;
+    TArray<EDuelArt, TInlineAllocator<DuelCourt::SpellSlotCount>> ValidSpells;
+    const auto StaffSpells = MakeArrayView(DuelCourt::StaffSpells);
+    for (uint8 Value : Save->StaffSpells)
+    {
+        const EDuelArt Spell = static_cast<EDuelArt>(Value);
+        if (StaffSpells.Contains(Spell))
+        {
+            ValidSpells.AddUnique(Spell);
+        }
+    }
+    const bool bHasStaffSlots = Save->StaffSpells.Num() == DuelCourt::SpellSlotCount &&
+        ValidSpells.Num() == DuelCourt::SpellSlotCount;
+    if (!bHasStaffSlots)
+    {
+        ValidSpells.Reset();
+        const EDuelArt LegacySpell = static_cast<EDuelArt>(Save->Spell);
+        if (StaffSpells.Contains(LegacySpell))
+        {
+            ValidSpells.Add(LegacySpell);
+        }
+        for (const EDuelArt Spell : StaffSpells)
+        {
+            ValidSpells.AddUnique(Spell);
+        }
+    }
+    for (int32 Slot = 0; Slot < DuelCourt::SpellSlotCount; ++Slot)
+    {
+        PlayerFighter->PreparedSpells[Slot] = ValidSpells[Slot];
+    }
+    PlayerFighter->ActiveSpellSlot = bHasStaffSlots && Save->ActiveSpellSlot < DuelCourt::SpellSlotCount ? Save->ActiveSpellSlot : 0;
+    constexpr int32 LegacyDefaultHealthFlasks = 3;
+    const bool bLegacyDefault = (Save->FlaskBudget == 0 && Save->BloodFlasks == LegacyDefaultHealthFlasks) ||
+        (Save->FlaskBudget == 7 && Save->BloodFlasks == 4);
+    PlayerFighter->HealthFlaskAllocation = bLegacyDefault ? DuelCourt::DefaultHealthFlasks :
+        FMath::Clamp(Save->BloodFlasks, 0, DuelCourt::TotalFlasks);
+    bWarrantFound = bPrisonGateOpen = bAntechamberReached = true;
+    Arena->ShowWarrant(false);
+    Arena->OpenPrisonGate();
+    bAppeal = bAppealRested = Save->bAppeal || Save->bYukiCourt;
+    bYukiCourt = Save->bYukiCourt;
+    Decision = bAppeal ? (Save->Evidence == static_cast<uint8>(EDuelEnding::CallWitness) ? EDuelEnding::CallWitness : EDuelEnding::SubmitReceipt)
+        : EDuelEnding::Undecided;
+    FirstDuelSeconds = FMath::Max(0, Save->FirstFight);
+    SecondDuelSeconds = FMath::Max(0, Save->SecondFight);
+    FirstBoss = Save->FirstBoss == 1 ? EDuelCharacter::Ema : EDuelCharacter::Hiro;
+    Arena->SetAppeal(bAppeal);
+    Arena->SetYukiCourt(bYukiCourt);
+    Arena->SetYukiRouteOpen(bYukiCourt);
+    const EDuelCharacter Other = FirstBoss == EDuelCharacter::Ema ? EDuelCharacter::Hiro : EDuelCharacter::Ema;
+    SetBoss(bYukiCourt ? EDuelCharacter::Yuki : bAppeal ? Other : FirstBoss);
+    ReturnToCheckpoint();
+    if (bYukiCourt && Save->bFinished)
+    {
+        CompletedDuelSeconds = FMath::Max(0, Save->FinalFight);
+        BossFighter->SetActorHiddenInGame(true);
+        BossFighter->SetActorEnableCollision(false);
+        PlayerFighter->SetActorLocation(DuelCourt::YukiOrigin + FVector(2590, 0, 62));
+        FinishTrial(Save->bCompanionFollowing);
+    }
+}
+
+void ADuelMode::TogglePause()
+{
+    if (Result == EDuelOutcome::Title)
+    {
+        return;
+    }
+    const bool bPaused = UGameplayStatics::IsGamePaused(this);
+    if (bPaused && (bControls || bLoadout))
+    {
+        bControls = false;
+        bLoadout = false;
+        return;
+    }
+    if (!bPaused)
+    {
+        MenuSelection = 0;
+    }
+    UGameplayStatics::SetGamePaused(this, !bPaused);
+    if (Arena)
+    {
+        Arena->PauseVoice(!bPaused);
+    }
+}
+
+int32 ADuelMode::PauseOptionCount() const
+{
+    if (Result == EDuelOutcome::Epilogue)
+    {
+        return 5;
+    }
+    return Result == EDuelOutcome::Ready ? (bAppeal ? 8 : 9) : 6;
+}
+
+EDuelPause ADuelMode::PauseOption(int32 Index) const
+{
+    if (Index == PauseOptionCount() - 1)
+    {
+        return EDuelPause::Title;
+    }
+    const EDuelPause Options[] = {EDuelPause::Resume, EDuelPause::Player, EDuelPause::Boss, EDuelPause::Loadout, EDuelPause::Controls,
+        EDuelPause::Checkpoint, EDuelPause::Quit, EDuelPause::Subtitles};
+    if (Result != EDuelOutcome::Ready && Index > 0)
+    {
+        return Options[Index + (Result == EDuelOutcome::Epilogue && Index >= 2 ? 4 : 3)];
+    }
+    return Options[bAppeal && Index >= 2 ? Index + 1 : Index];
+}
+
+void ADuelMode::Navigate(int32 Step)
+{
+    if (Result == EDuelOutcome::Title)
+    {
+        do
+        {
+            MenuSelection = (MenuSelection + 3 + Step) % 3;
+        } while (MenuSelection == 0 && !CanContinue());
+        return;
+    }
+    if (bControls)
+    {
+        return;
+    }
+    if (bLoadout)
+    {
+        LoadoutRow = (LoadoutRow + Step + LoadoutRows) % LoadoutRows;
+        return;
+    }
+    const int32 Count = UGameplayStatics::IsGamePaused(this) ? PauseOptionCount() :
+        (Result == EDuelOutcome::Archive && !bAppeal && bReadingArchive && Decision == EDuelEnding::Undecided ? 2 : 0);
+    if (Count > 0)
+    {
+        MenuSelection = (MenuSelection + Count + Step) % Count;
+    }
+}
+
+void ADuelMode::AdjustLoadout(int32 Step)
+{
+    if (!bLoadout || !PlayerFighter || !UGameplayStatics::IsGamePaused(this))
+    {
+        return;
+    }
+    if (LoadoutRow == ArtLoadoutRow)
+    {
+        PlayerFighter->ArtSelection = DuelCourt::NextArt(PlayerFighter->ArtSelection, PlayerFighter->SelectedCharacter(), Step);
+    }
+    else if (LoadoutRow >= FirstSpellRow && LoadoutRow < FlaskLoadoutRow)
+    {
+        PlayerFighter->AdjustSpellSlot(LoadoutRow - FirstSpellRow, Step);
+    }
+    else if (LoadoutRow == FlaskLoadoutRow)
+    {
+        constexpr int32 Options = DuelCourt::TotalFlasks + 1;
+        PlayerFighter->HealthFlaskAllocation = (PlayerFighter->HealthFlaskAllocation + Step + Options) % Options;
+        PlayerFighter->Flasks = PlayerFighter->HealthFlaskAllocation;
+        PlayerFighter->FocusFlasks = DuelCourt::TotalFlasks - PlayerFighter->HealthFlaskAllocation;
+    }
+    else
+    {
+        const EDuelHand Hand = LoadoutRow % 2 == 0 ? EDuelHand::Right : EDuelHand::Left;
+        PlayerFighter->AdjustWeaponSlot(Hand, LoadoutRow >= 2, Step);
+    }
+}
+
+void ADuelMode::Confirm()
+{
+    if (Result == EDuelOutcome::Title)
+    {
+        if (MenuSelection == 0 && CanContinue())
+        {
+            LoadCheckpoint();
+        }
+        else if (MenuSelection == 1)
+        {
+            ReturnToCheckpoint();
+        }
+        else if (MenuSelection == 2)
+        {
+            UKismetSystemLibrary::QuitGame(this, GetWorld()->GetFirstPlayerController(), EQuitPreference::Quit, false);
+        }
+        return;
+    }
+    if (UGameplayStatics::IsGamePaused(this))
+    {
+        if (bControls)
+        {
+            bControls = false;
+            return;
+        }
+        if (bLoadout)
+        {
+            AdjustLoadout(1);
+            return;
+        }
+        switch (PauseOption(MenuSelection))
+        {
+        case EDuelPause::Resume:
+            TogglePause();
+            break;
+        case EDuelPause::Player:
+        case EDuelPause::Boss:
+        {
+            ADuelFighter* Fighter = PauseOption(MenuSelection) == EDuelPause::Player ? PlayerFighter.Get() : BossFighter.Get();
+            if (Fighter)
+            {
+                Fighter->SelectCharacter(Fighter->SelectedCharacter() == EDuelCharacter::Hiro ? EDuelCharacter::Ema : EDuelCharacter::Hiro);
+            }
+            break;
+        }
+        case EDuelPause::Checkpoint:
+            ReturnToCheckpoint();
+            break;
+        case EDuelPause::Controls:
+            bControls = true;
+            break;
+        case EDuelPause::Subtitles:
+            bEffortSubtitles = !bEffortSubtitles;
+            break;
+        case EDuelPause::Loadout:
+            bLoadout = true;
+            LoadoutRow = 0;
+            break;
+        case EDuelPause::Title:
+            UGameplayStatics::SetGamePaused(this, false);
+            UGameplayStatics::OpenLevel(this, FName(TEXT("/Game/Maps/RainCourt")));
+            break;
+        case EDuelPause::Quit:
+            UKismetSystemLibrary::QuitGame(this, GetWorld()->GetFirstPlayerController(), EQuitPreference::Quit, false);
+            break;
+        }
+    }
+    else if (Result == EDuelOutcome::Ready)
+    {
+        if (FigureView != 0)
+        {
+            CloseCharacterView();
+        }
+        else if (NearWarrant())
+        {
+            bWarrantFound = true;
+            Arena->ShowWarrant(false);
+            Arena->Sound(EDuelSound::Flask, DuelCourt::Warrant);
+        }
+        else if (NearPrisonGate() && bWarrantFound)
+        {
+            bPrisonGateOpen = true;
+            Arena->OpenPrisonGate();
+            Arena->Sound(EDuelSound::RainAtlas, FVector(DuelCourt::PrisonGateX, 0, 120));
+        }
+        else if (NearRestPoint())
+        {
+            bAntechamberReached |= !bAppeal;
+            bAppealRested |= bAppeal;
+            PlayerFighter->RestAtCheckpoint();
+            WriteCheckpoint();
+            Arena->Sound(EDuelSound::Flask, PlayerFighter->GetActorLocation());
+        }
+        else
+        {
+            BeginEncounter();
+        }
+    }
+    else if (Result == EDuelOutcome::Archive)
+    {
+        if (NearAppealPassage())
+        {
+            Result = EDuelOutcome::Passage;
+            Arena->Sound(EDuelSound::RainAtlas, DuelCourt::AppealPassage);
+        }
+        else if (bReadingArchive)
+        {
+            if (!bAppeal && Decision == EDuelEnding::Undecided)
+            {
+                ChooseEnding(MenuSelection == 0 ? EDuelEnding::SubmitReceipt : EDuelEnding::CallWitness);
+            }
+            else
+            {
+                bReadingArchive = false;
+            }
+        }
+        else if (RitualMark() != INDEX_NONE)
+        {
+            const FVector Mark = Arena->CourtOrigin() + DuelCourt::RitualMarks[RitualSeal];
+            ++RitualSeal;
+            RitualAt = GetWorld()->GetTimeSeconds();
+            Arena->RitualTrace(Mark, RitualComplete());
+            if (RitualComplete())
+            {
+                Arena->SetYukiRouteOpen(true);
+            }
+        }
+        else if (NearArchiveDesk() && (!bAppeal || RitualComplete()))
+        {
+            bReadingArchive = true;
+            MenuSelection = 0;
+            PlayerFighter->EndCombat();
+        }
+    }
+    else if (Result == EDuelOutcome::Epilogue)
+    {
+        if (bReadingArchive)
+        {
+            if (++MenuSelection > 2)
+            {
+                bReadingArchive = false;
+                bCompanionFollowing = true;
+                WriteCheckpoint();
+            }
+        }
+        else if (NearGardenExit())
+        {
+            MenuSelection = 0;
+            bReadingArchive = true;
+        }
+    }
+    else if (Result == EDuelOutcome::Defeat)
+    {
+        ReturnToCheckpoint();
+    }
+}
+
+void ADuelMode::ReturnToCheckpoint()
+{
+    if (!PlayerFighter || !BossFighter || !Arena)
+    {
+        return;
+    }
+    if (Result == EDuelOutcome::Epilogue)
+    {
+        return;
+    }
+    if (bAppeal && !bAppealRested)
+    {
+        bAppealRested = true;
+    }
+    ResetEncounter();
+    Result = EDuelOutcome::Ready;
+    Arena->SetGateClosed(true);
+    Arena->SetCombatCamera(false);
+    const FTransform Spawn = bYukiCourt ? DuelCourt::YukiCheckpoint() : bAppeal ? DuelCourt::AppealCheckpoint() :
+        (bAntechamberReached ? DuelCourt::Checkpoint() : DuelCourt::LowerCheckpoint());
+    PlayerFighter->SetActorLocationAndRotation(Spawn.GetLocation(), Spawn.GetRotation(), false, nullptr, ETeleportType::TeleportPhysics);
+    PlayerFighter->EndCombat();
+    PlayerFighter->PrepareExploration();
+    BossFighter->EndCombat();
+}
+
+void ADuelMode::ResetEncounter(bool bKeepPosition)
+{
+    if (PlayerFighter && BossFighter && Arena)
+    {
+        CloseCharacterView();
+        BossFighter->ShowCharacterForm(false);
+        BossFighter->SetActorHiddenInGame(false);
+        UGameplayStatics::SetGamePaused(this, false);
+        Arena->PauseVoice(false);
+        Arena->ClearCombatEffects();
+        Arena->SetBattlePhase(1);
+        Arena->SetGateClosed(false);
+        Arena->SetCombatCamera(true);
+        Arena->SetArchiveGateOpen(false);
+        PlayerFighter->ResetFighter(bKeepPosition);
+        BossFighter->ResetFighter();
+        BossFighter->AppealIntro = bAppeal ? .82f : 0.f;
+        if (!bAppeal)
+        {
+            Decision = EDuelEnding::Undecided;
+        }
+        SpokenPhase = 0;
+        SubtitleUntil = 0.f;
+        MenuSelection = 0;
+        bControls = false;
+        bLoadout = false;
+        bReadingArchive = false;
+        bGateOpen = false;
+        RitualSeal = 0;
+        RitualAt = 0.0;
+        DuelStartedAt = GetWorld()->GetTimeSeconds();
+        CompletedDuelSeconds = 0;
+        Result = EDuelOutcome::Fighting;
+        if (bKeepPosition)
+        {
+            Arena->StartScore(BossFighter->SelectedCharacter());
+            Arena->TryBossLine(BossFighter->SelectedCharacter(), EDuelVoice::Intro, BossFighter->GetActorLocation());
+        }
+    }
+}
+
+void ADuelMode::CycleCharacterView()
+{
+    APlayerController* Controller = GetWorld()->GetFirstPlayerController();
+    if (Result != EDuelOutcome::Ready || bYukiCourt || !PlayerFighter || !BossFighter || !Controller)
+    {
+        return;
+    }
+    if (FigureView == 2)
+    {
+        CloseCharacterView();
+        return;
+    }
+    const FVector Origin = Arena->CourtOrigin();
+    const FVector Position = Origin + FVector(-695, 0, 180);
+    if (!FigureCamera)
+    {
+        const FRotator Aim = (Origin + FVector(0, 0, 119) - Position).Rotation();
+        FigureCamera = GetWorld()->SpawnActor<ACameraActor>(Position, Aim);
+        if (!FigureCamera)
+        {
+            return;
+        }
+        FigureCamera->GetCameraComponent()->SetFieldOfView(54.f);
+    }
+    FigureCamera->SetActorLocation(Position);
+    const bool bAlternate = FigureView == 1;
+    if (!PlayerFighter->ShowCharacterForm(bAlternate) || !BossFighter->ShowCharacterForm(bAlternate))
+    {
+        PlayerFighter->ShowCharacterForm(false);
+        BossFighter->ShowCharacterForm(false);
+        return;
+    }
+
+    if (FigureView == 0)
+    {
+        ApproachBeforePreview = PlayerFighter->GetActorTransform();
+    }
+    PlayerFighter->EndCombat();
+    BossFighter->EndCombat();
+    PlayerFighter->SetActorLocationAndRotation(Origin + FVector(0, -155, 62), FRotator(0, 145, 0));
+    BossFighter->SetActorLocationAndRotation(Origin + FVector(20, 159, 103), FRotator(0, -145, 0));
+    PlayerFighter->SetCharacterPreview(true);
+    BossFighter->SetCharacterPreview(true);
+    Controller->SetViewTarget(FigureCamera);
+    FigureView = bAlternate ? 2 : 1;
+}
+
+void ADuelMode::TurnCharacterView(float Degrees)
+{
+    if (FigureView != 0 && PlayerFighter && BossFighter)
+    {
+        const FRotator Turn(0, Degrees, 0);
+        PlayerFighter->AddActorWorldRotation(Turn);
+        BossFighter->AddActorWorldRotation(Turn);
+    }
+}
+
+void ADuelMode::CloseCharacterView()
+{
+    if (FigureView == 0)
+    {
+        return;
+    }
+    FigureView = 0;
+    for (ADuelFighter* Fighter : {PlayerFighter.Get(), BossFighter.Get()})
+    {
+        Fighter->ShowCharacterForm(false);
+        Fighter->SetCharacterPreview(false);
+        const FTransform Start = Fighter == BossFighter ? DuelCourt::Start(true, Arena->CourtOrigin()) : ApproachBeforePreview;
+        Fighter->SetActorLocationAndRotation(Start.GetLocation(), Start.GetRotation());
+    }
+    if (APlayerController* Controller = GetWorld()->GetFirstPlayerController())
+    {
+        Controller->SetViewTarget(PlayerFighter);
+    }
+}
+
+void ADuelMode::AnnouncePhase(int32 Phase)
+{
+    Arena->IntensifyScore();
+    SpokenPhase = Phase;
+    SubtitleUntil = GetWorld()->GetTimeSeconds() + 6.1f;
+    if (Phase == 2 && Arena->TryBossLine(BossFighter->SelectedCharacter(), EDuelVoice::Witch, BossFighter->GetActorLocation()))
+    {
+        SubtitleUntil = 0.f;
+    }
+    else if (Phase == 3)
+    {
+        Arena->StopVoice();
+    }
+    if (Phase == 3 && Arena)
+    {
+        Arena->Sound(EDuelSound::VerdictBell, Arena->CourtOrigin() + FVector(2050, 0, 540));
+    }
+}
+
+bool ADuelMode::DialogueVisible() const
+{
+    return SpokenPhase > 0 && Result == EDuelOutcome::Fighting && GetWorld()->GetTimeSeconds() < SubtitleUntil;
+}
+
+const TCHAR* ADuelMode::CombatCaption() const
+{
+    if (Result == EDuelOutcome::Defeat)
+    {
+        if (const TCHAR* Line = Arena->VoiceCaption())
+        {
+            return Line;
+        }
+        if (GetWorld()->GetTimeSeconds() >= SubtitleUntil)
+        {
+            return nullptr;
+        }
+        switch (BossFighter->SelectedCharacter())
+        {
+        case EDuelCharacter::Hiro: return TEXT("我讨厌你的事实不会改变。永远不会。");
+        case EDuelCharacter::Ema: return TEXT("怎、怎么会……！我怎么可能会撒谎……！");
+        default: return TEXT("这一页还有空白。等你们自己来写吧。");
+        }
+    }
+    if (DialogueVisible())
+    {
+        if (bYukiCourt)
+        {
+            return SpokenPhase == 2 ? TEXT("让魔女消失？连你们曾经的痛苦也一并抹去吗？") :
+                TEXT("我们记得发生过的一切。谁也不必再为它变成魔女。");
+        }
+        const ADuelFighter* Speaker = SpokenPhase == 2 ? BossFighter.Get() : PlayerFighter.Get();
+        const bool bEma = Speaker->SelectedCharacter() == EDuelCharacter::Ema;
+        if (SpokenPhase == 2)
+        {
+            if (bAppeal)
+            {
+                return Decision == EDuelEnding::CallWitness
+                    ? TEXT("传唤名册上有她。让她自己说。") : TEXT("复核印还在。调出前一份记录。");
+            }
+            return bEma ? TEXT("这份证词上，怎么会是我的字？") :
+                TEXT("如果那是我，你还是会拉住我吗？");
+        }
+        if (bAppeal)
+        {
+            return bEma ? TEXT("她的证词，必须完整地留下。") : TEXT("落印之前，把原件送上席。");
+        }
+        return bEma ? TEXT("把手给我。我们一起离开这里。") : TEXT("我认得那个眼神。让我去叫醒她。");
+    }
+    return Result == EDuelOutcome::Fighting && (bEffortSubtitles || Arena->VoiceIsStory()) ? Arena->VoiceCaption() : nullptr;
+}
+
+FString ADuelMode::CaptionSpeaker() const
+{
+    const bool bBoss = DialogueVisible() ? SpokenPhase == 2 : Arena->VoiceIsBoss();
+    const ADuelFighter* Speaker = bBoss ? BossFighter.Get() : PlayerFighter.Get();
+    return FString::Printf(TEXT("%s  ·  %s"), Speaker->CharacterName(), bBoss ? TEXT("首领") : TEXT("主角"));
+}
+
+float ADuelMode::CaptionOpacity() const
+{
+    const bool bTimedFallback = Result == EDuelOutcome::Defeat && !Arena->VoiceCaption();
+    return DialogueVisible() || bTimedFallback ? FMath::SmoothStep(0.f, .46f,
+        static_cast<float>(SubtitleUntil - GetWorld()->GetTimeSeconds())) : Arena->VoiceCaptionOpacity();
+}
+
+void ADuelMode::ChooseEnding(EDuelEnding Choice)
+{
+    if (Result == EDuelOutcome::Archive && !bAppeal && bReadingArchive && Decision == EDuelEnding::Undecided && Choice != EDuelEnding::Undecided)
+    {
+        Decision = Choice;
+        Arena->Sound(EDuelSound::RainAtlas, FVector(DuelCourt::ArchiveDeskX, 0, 170));
+    }
+}
+
+void ADuelHUD::BeginPlay()
+{
+    Super::BeginPlay();
+    FontAtlas = LoadObject<UTexture2D>(nullptr, TEXT("/Game/DuelArt/UI/T_DuelHud.T_DuelHud"));
+    if (FontAtlas)
+    {
+        FontGlyphs = Cast<UDuelHudFont>(FontAtlas->GetAssetUserDataOfClass(UDuelHudFont::StaticClass()));
+    }
+    if (!FontGlyphs || FontGlyphs->Columns <= 0 || FontGlyphs->PixelSize <= 0 ||
+        FontGlyphs->CellWidth <= 0 || FontGlyphs->CellHeight <= 0 || FontGlyphs->DisplayStart < 0 ||
+        FontGlyphs->DisplayStart + 95 > FontGlyphs->CjkStart ||
+        FontGlyphs->CjkStart + FontGlyphs->Codepoints.Num() > FontGlyphs->Advances.Num())
+    {
+        FontGlyphs = nullptr;
+        UE_LOG(LogTemp, Error, TEXT("HUD font asset needs its glyph data. Run SourceAssets/bake_hud.py and Content/Python/prepare_art.py."));
+    }
+    ChromeAtlas = LoadObject<UTexture2D>(nullptr, TEXT("/Game/DuelArt/UI/T_HudChrome.T_HudChrome"));
+}
+
+void ADuelHUD::Chrome(int32 Tile, float X, float Y, float W, float H, const FLinearColor& Tint)
+{
+    const FTexture* Texture = ChromeAtlas ? ChromeAtlas->GetResource() : nullptr;
+    if (!Texture)
+    {
+        return;
+    }
+    const FVector2D UV((Tile % 4) * .25, (Tile / 4) * .125);
+    FCanvasTileItem Item(FVector2D(X, Y), Texture, FVector2D(W, H), UV + FVector2D(.001, .0015),
+        UV + FVector2D(.249, .1235), Tint);
+    Item.BlendMode = SE_BLEND_Translucent;
+    Canvas->DrawItem(Item);
+}
+
+void ADuelHUD::Panel(float X, float Y, float W, float H, float S)
+{
+    Chrome(0, X, Y, W, H);
+    DrawRect(FLinearColor(.58f, .43f, .25f, .52f), X, Y, W, 1.f);
+    DrawRect(FLinearColor(.40f, .28f, .17f, .42f), X, Y + H - 1.f, W, 1.f);
+    const float Corner = FMath::Min(27.f * S, H * .6f);
+    Chrome(1, X + 1, Y + 1, Corner, Corner);
+}
+
+void ADuelHUD::DrawMeter(float X, float Y, float W, float H, float Ratio, const FLinearColor& Color, float Trail)
+{
+    DrawRect(Ink, X - 2.f, Y - 2.f, W + 4.f, H + 4.f);
+    DrawRect(FLinearColor(.41f, .31f, .19f, .76f), X - 1.f, Y - 1.f, W + 2.f, H + 2.f);
+    DrawRect(FLinearColor(.040f, .029f, .026f, .96f), X, Y, W, H);
+    const float Wound = W * FMath::Clamp(Trail, 0.f, 1.f);
+    const float Fill = W * FMath::Clamp(Ratio, 0.f, 1.f);
+    if (Wound > Fill)
+    {
+        DrawRect(FLinearColor(.67f, .40f, .18f, .83f), X + Fill, Y, Wound - Fill, H);
+    }
+    if (Fill > 0.f)
+    {
+        DrawRect(Color, X, Y, Fill, H);
+        Chrome(6, X, Y, Fill, H, FLinearColor(.84f, .66f, .40f, .65f));
+    }
+}
+
+void ADuelHUD::DrawEquipment(const ADuelFighter& Fighter, float H, float S)
+{
+    const float X = 32.f * S;
+    const float Y = H - 137.f * S;
+    const float Card = 55.f * S;
+    const float Gap = 4.f * S;
+    const float Middle = X + Card + Gap;
+    const auto DrawSlot = [&](float SlotX, float SlotY, int32 Icon, const FLinearColor& Tint)
+    {
+        Chrome(0, SlotX, SlotY, Card, Card);
+        Chrome(14, SlotX, SlotY, Card, Card, Tint);
+        Chrome(Icon, SlotX + 7.f * S, SlotY + 6.f * S, 41.f * S, 41.f * S, Tint);
+    };
+    for (EDuelHand Hand : {EDuelHand::Left, EDuelHand::Right})
+    {
+        const bool bRight = Hand == EDuelHand::Right;
+        const float CardX = bRight ? Middle + Card + Gap : X;
+        const EDuelWeapon Item = Fighter.EquippedWeapon(Hand);
+        if (Item == EDuelWeapon::Empty)
+        {
+            DrawSlot(CardX, Y, 13, Ash);
+        }
+        else
+        {
+            const int32 Icon = Item == EDuelWeapon::YukiPen ? 16 : Item == EDuelWeapon::RitualSword ? 17 :
+                DuelCourt::IsShield(Item) ? 8 : Item == EDuelWeapon::Axe ? 10 :
+                Item == EDuelWeapon::Hammer || Item == EDuelWeapon::FirePoker ? 11 :
+                Item == EDuelWeapon::Spear || Item == EDuelWeapon::Staff ? 5 :
+                Item == EDuelWeapon::Greatblade || Item == EDuelWeapon::Houndfang ? 4 : 3;
+            DrawSlot(CardX, Y, Icon, Fighter.IsGuarding(Hand) ? Ember : FLinearColor::White);
+        }
+        Label(bRight ? TEXT("3") : TEXT("1"), CardX + 6.f * S, Y + 3.f * S, 11.f * S, Ash);
+        Label(DuelCourt::EquipmentName(Item), CardX + Card * .5f, Y + 43.f * S, 10.f * S, Ivory, true);
+    }
+    const float Bottom = Y + Card + Gap;
+    const bool bHeal = Fighter.EquippedItem() == EDuelItem::Flask;
+    DrawSlot(Middle, Bottom, bHeal ? 7 : 9, bHeal ? Ivory : FLinearColor(.61f, .81f, .99f));
+    Label(FString::FromInt(Fighter.ItemCount()), Middle + 45.f * S, Bottom + 5.f * S, 16.f * S,
+        Fighter.ItemCount() > 0 ? Ember : Ash, true);
+    Label(bHeal ? TEXT("血瓶") : TEXT("蓝瓶"), Middle + Card * .5f, Bottom + 42.f * S, 11.f * S, Ivory, true);
+    const EDuelArt Art = Fighter.ActiveArt();
+    if (Art != EDuelArt::Default)
+    {
+        const bool bReady = Fighter.HasFocus(Art) &&
+            Fighter.StaminaRatio() * DuelCourt::MaxStamina >= DuelCourt::WeaponArt(Art).Strike.Timing.Cost;
+        const FLinearColor Tint = bReady ? Ivory : Ash;
+        DrawSlot(Middle, Y - Card - Gap, 12, Tint);
+        const bool bStaff = Fighter.EquippedWeapon(Fighter.ArtHand()) == EDuelWeapon::Staff;
+        Label(bStaff ? FString::Printf(TEXT("E   4 · %d"), Fighter.SpellSlot() + 1) : TEXT("E"),
+            Middle + 6.f * S, Y - Card + 1.f * S, 11.f * S, Ash);
+        Label(DuelCourt::WeaponArt(Art).Name, Middle + Card * .5f, Y - Gap - 12.f * S, 11.f * S, Tint, true);
+    }
+    Label(TEXT("2 切换    R 使用"), Middle + Card * .5f, H - 16.f * S, 10.f * S, Ash, true);
+}
+
+void ADuelHUD::DrawLoadout(const ADuelMode& Mode, float W, float H, float S)
+{
+    const ADuelFighter& Fighter = *Mode.GetPlayerFighter();
+    const float Width = 660.f * S;
+    const float X = (W - Width) * .5f;
+    const float Height = 470.f * S;
+    const float Y = (H - Height) * .5f;
+    Panel(X, Y, Width, Height, S);
+    Label(TEXT("备战配置"), W * .5f, Y + 19.f * S, 29.f * S, Ivory, true);
+    const EDuelArt Selection = Fighter.SelectedArt();
+    const FString ArtName = Selection == EDuelArt::Default ? TEXT("随武器") : DuelCourt::WeaponArt(Selection).Name;
+    const TCHAR* Titles[] = {TEXT("右手主槽"), TEXT("左手主槽"), TEXT("右手备用"), TEXT("左手备用"),
+        TEXT("通用战技"), TEXT("法术槽 1"), TEXT("法术槽 2"), TEXT("法术槽 3"), TEXT("药瓶分配")};
+    static_assert(UE_ARRAY_COUNT(Titles) == ADuelMode::LoadoutRows);
+    const EDuelWeapon Weapons[] = {Fighter.EquippedWeapon(), Fighter.EquippedWeapon(EDuelHand::Left),
+        Fighter.ReserveWeapon(EDuelHand::Right), Fighter.ReserveWeapon(EDuelHand::Left)};
+    const FString Values[] = {DuelCourt::EquipmentName(Weapons[0]), DuelCourt::EquipmentName(Weapons[1]),
+        DuelCourt::EquipmentName(Weapons[2]), DuelCourt::EquipmentName(Weapons[3]), ArtName,
+        DuelCourt::WeaponArt(Fighter.SpellAt(0)).Name, DuelCourt::WeaponArt(Fighter.SpellAt(1)).Name,
+        DuelCourt::WeaponArt(Fighter.SpellAt(2)).Name,
+        FString::Printf(TEXT("血瓶 %d   蓝瓶 %d"), Fighter.FlaskAllocation(), DuelCourt::TotalFlasks - Fighter.FlaskAllocation())};
+    const int32 SelectedRow = Mode.LoadoutChoice();
+    for (int32 I = 0; I < ADuelMode::LoadoutRows; ++I)
+    {
+        const float Row = Y + (66.f + I * 34.f) * S;
+        const bool bSelected = SelectedRow == I;
+        if (bSelected)
+        {
+            DrawRect(FLinearColor(.48f, .31f, .15f, .29f), X + 22.f * S, Row - 5.f * S, Width - 44.f * S, 33.f * S);
+            DrawRect(Ember, X + 22.f * S, Row - 5.f * S, 2.f, 33.f * S);
+        }
+        const EDuelWeapon Item = I < UE_ARRAY_COUNT(Weapons) ? Weapons[I] : EDuelWeapon::Empty;
+        const int32 Icon = I >= UE_ARRAY_COUNT(Weapons) ? (I == ADuelMode::FlaskLoadoutRow ? 9 : 12) :
+            Item == EDuelWeapon::YukiPen ? 16 : Item == EDuelWeapon::RitualSword ? 17 :
+            Item == EDuelWeapon::Empty ? 13 : DuelCourt::IsShield(Item) ? 8 : Item == EDuelWeapon::Axe ? 10 :
+            Item == EDuelWeapon::Hammer || Item == EDuelWeapon::FirePoker ? 11 :
+            Item == EDuelWeapon::Spear || Item == EDuelWeapon::Staff ? 5 :
+            Item == EDuelWeapon::Greatblade || Item == EDuelWeapon::Houndfang ? 4 : 3;
+        Chrome(Icon, X + 33.f * S, Row - 2.f * S, 27.f * S, 27.f * S, bSelected ? Ember : Ivory);
+        Label(Titles[I], X + 70.f * S, Row, 17.f * S, Ash);
+        Label(Values[I], X + 193.f * S, Row, 19.f * S, bSelected ? Ember : Ivory);
+        if (I == ADuelMode::FirstSpellRow + Fighter.SpellSlot())
+        {
+            Label(TEXT("当前法术"), X + Width - 106.f * S, Row + 3.f * S, 14.f * S, Cerulean);
+        }
+        if (I < UE_ARRAY_COUNT(Weapons))
+        {
+            if (const TCHAR* Effect = DuelCourt::EquipmentEffect(Weapons[I]))
+            {
+                Label(Effect, X + 340.f * S, Row + 3.f * S, 14.f * S, Ash);
+            }
+        }
+    }
+    const bool bSpellRow = SelectedRow >= ADuelMode::FirstSpellRow && SelectedRow < ADuelMode::FlaskLoadoutRow;
+    const EDuelArt ShownArt = bSpellRow ? Fighter.SpellAt(SelectedRow - ADuelMode::FirstSpellRow) :
+        SelectedRow == ADuelMode::ArtLoadoutRow ? Selection : Fighter.ActiveArt();
+    if (ShownArt != EDuelArt::Default && SelectedRow != ADuelMode::FlaskLoadoutRow)
+    {
+        const auto& Detail = DuelCourt::WeaponArt(ShownArt);
+        Label(Detail.Description, X + 40.f * S, Y + 373.f * S, 15.f * S, Ash);
+        if (const int32 Cost = DuelCourt::FocusCost(ShownArt); Cost > 0)
+        {
+            Label(FString::Printf(TEXT("消耗 %d MP"), Cost), X + 40.f * S, Y + 397.f * S, 14.f * S, Cerulean);
+        }
+    }
+    Label(TEXT("W / S 选择    A / D 更换    Esc 返回"),
+        W * .5f, Y + 440.f * S, 15.f * S, Ember, true);
+}
+
+void ADuelHUD::Label(const FString& Text, float X, float Y, float Size, const FLinearColor& Color,
+    bool bCenter, bool bDisplay)
+{
+    const FTexture* Texture = FontAtlas ? FontAtlas->GetResource() : nullptr;
+    if (!Texture || !FontGlyphs)
+    {
+        return;
+    }
+    const UDuelHudFont& Font = *FontGlyphs;
+    const float Scale = Size / Font.PixelSize;
+    const int32 LatinStart = bDisplay ? Font.DisplayStart : 0;
+    const auto Glyph = [&Font, LatinStart](TCHAR C)
+    {
+        if (C >= 32 && C < 127)
+        {
+            return LatinStart + C - 32;
+        }
+        const int32 Chinese = Algo::BinarySearch(Font.Codepoints, static_cast<int32>(C));
+        return Chinese == INDEX_NONE ? LatinStart + '?' - 32 : Font.CjkStart + Chinese;
+    };
+    if (bCenter)
+    {
+        for (TCHAR C : Text)
+        {
+            X -= Font.Advances[Glyph(C)] * Scale * .5f;
+        }
+    }
+    const FVector2D AtlasSize(FontAtlas->GetSizeX(), FontAtlas->GetSizeY());
+    const FVector2D Cell(Font.CellWidth, Font.CellHeight);
+    const FVector2D Quad = Cell * Scale;
+    for (TCHAR C : Text)
+    {
+        const int32 Index = Glyph(C);
+        if (C != TEXT(' '))
+        {
+            const FVector2D Origin((Index % Font.Columns) * Cell.X, (Index / Font.Columns) * Cell.Y);
+            const FVector2D Position(X - Font.Padding * Scale, Y - Font.Padding * Scale);
+            const FVector2D MinUV = Origin / AtlasSize;
+            const FVector2D MaxUV = (Origin + Cell) / AtlasSize;
+            FCanvasTileItem Tile(Position + FVector2D(1.f, 1.5f), Texture, Quad, MinUV, MaxUV,
+                FLinearColor(.004f, .006f, .009f, .93f));
+            Tile.BlendMode = SE_BLEND_Translucent;
+            Canvas->DrawItem(Tile);
+            Tile.Position = Position;
+            Tile.SetColor(Color);
+            Canvas->DrawItem(Tile);
+        }
+        X += Font.Advances[Index] * Scale;
+    }
+}
+
+void ADuelHUD::DrawPrompt(const ADuelMode& Mode, bool bPaused, float W, float H, float S)
+{
+    const EDuelOutcome Outcome = Mode.Outcome();
+    if (Outcome == EDuelOutcome::Title)
+    {
+        DrawRect(FLinearColor(.018f, .019f, .031f, .48f), 0, 0, W, H);
+        const float X = W * .103f;
+        const float Y = H * .235f;
+        Chrome(0, X - 33.f * S, Y - 34.f * S, 546.f * S, 410.f * S, FLinearColor(1, 1, 1, .84f));
+        Label(TEXT("魔女审判"), X, Y, 63.f * S, Ivory);
+        Label(TEXT("缺页证言"), X + 2.f * S, Y + 76.f * S, 39.f * S, Ember);
+        DrawRect(Bronze, X + 3.f * S, Y + 132.f * S, 386.f * S, 1.f);
+        const TCHAR* Actions[] = {TEXT("继续审判"), TEXT("开始新审判"), TEXT("退出")};
+        const bool bContinue = Mode.CanContinue();
+        for (int32 I = 0; I < UE_ARRAY_COUNT(Actions); ++I)
+        {
+            if (I == 0 && !bContinue)
+            {
+                continue;
+            }
+            const float Row = Y + (157.f + (I - (bContinue ? 0 : 1)) * 42.f) * S;
+            if (Mode.Choice() == I)
+            {
+                DrawRect(FLinearColor(.53f, .35f, .19f, .27f), X, Row - 5.f * S, 344.f * S, 37.f * S);
+                Chrome(13, X + 9.f * S, Row + 4.f * S, 13.f * S, 13.f * S, Ember);
+            }
+            Label(Actions[I], X + 32.f * S, Row, 20.f * S, Mode.Choice() == I ? Ember : Ivory);
+        }
+        Label(TEXT("W / S 选择    F 确认"), X + 2.f * S, Y + 299.f * S, 14.f * S, Ash);
+        Label(TEXT("《魔法少女的魔女审判》非官方二创"), X + 2.f * S, Y + 333.f * S, 13.f * S, Ash);
+        return;
+    }
+    if (bPaused)
+    {
+        const float Width = 442.f * S;
+        const float X = (W - Width) * .5f;
+        const float Y = H * .25f;
+        const int32 Count = Mode.PauseOptionCount();
+        DrawRect(FLinearColor(.014f, .017f, .026f, .49f), 0, 0, W, H);
+        if (Mode.ShowingLoadout())
+        {
+            DrawLoadout(Mode, W, H, S);
+            return;
+        }
+        if (Mode.ShowingControls())
+        {
+            Panel(X, Y, Width, 328.f * S, S);
+            Label(TEXT("按键"), W * .5f, Y + 19.f * S, 30.f * S, Ivory, true);
+            Label(TEXT("WASD 移动   Space 跳跃   Q 锁定"), X + 28.f * S, Y + 68.f * S, 16.f * S, Ivory);
+            Label(TEXT("短按 Shift 后闪   方向加短按翻滚"), X + 28.f * S, Y + 96.f * S, 16.f * S, Ivory);
+            Label(TEXT("方向加长按 Shift 跑步"), X + 28.f * S, Y + 124.f * S, 16.f * S, Ivory);
+            Label(TEXT("左键管右手   右键管左手"), X + 28.f * S, Y + 152.f * S, 16.f * S, Ivory);
+            Label(TEXT("武器短按轻击、长按重击   盾牌按住防御"), X + 28.f * S, Y + 180.f * S, 16.f * S, Ivory);
+            Label(TEXT("E / 侧键 战技   1 / 3 左右手   2 道具   R 使用"), X + 28.f * S, Y + 206.f * S, 15.f * S, Ivory);
+            Label(TEXT("迎着攻击瞬间举盾可弹反，继续按住为格挡"), X + 28.f * S, Y + 231.f * S, 15.f * S, Ivory);
+            Label(TEXT("4 切换法杖法术"), X + 28.f * S, Y + 256.f * S, 15.f * S, Ivory);
+            Label(TEXT("F / Esc 返回"), W * .5f, Y + 288.f * S, 16.f * S, Ember, true);
+            return;
+        }
+        Panel(X, Y, Width, (113.f + Count * 36.f) * S, S);
+        Label(Outcome == EDuelOutcome::Ready ? Mode.AreaName() : TEXT("暂停"),
+            W * .5f, Y + 18.f * S, 30.f * S, Ivory, true);
+        for (int32 I = 0; I < Count; ++I)
+        {
+            const float Row = Y + (65.f + I * 36.f) * S;
+            const bool bSelected = I == Mode.Choice();
+            if (bSelected)
+            {
+                DrawRect(FLinearColor(.48f, .31f, .15f, .25f), X + 19.f * S, Row - 3.f * S, Width - 38.f * S, 31.f * S);
+                DrawRect(Ember, X + 19.f * S, Row - 3.f * S, 2.f, 31.f * S);
+            }
+            FString Text;
+            switch (Mode.PauseOption(I))
+            {
+            case EDuelPause::Resume: Text = TEXT("继续"); break;
+            case EDuelPause::Player: Text = FString::Printf(TEXT("主角   %s · 站立"), Mode.GetPlayerFighter()->CharacterName()); break;
+            case EDuelPause::Boss: Text = FString::Printf(TEXT("首领   %s · 四足"), Mode.GetBossFighter()->CharacterName()); break;
+            case EDuelPause::Loadout: Text = TEXT("武器与战技"); break;
+            case EDuelPause::Controls: Text = TEXT("查看按键"); break;
+            case EDuelPause::Checkpoint: Text = TEXT("返回复活点"); break;
+            case EDuelPause::Quit: Text = TEXT("退出游戏"); break;
+            case EDuelPause::Title: Text = TEXT("返回主菜单"); break;
+            case EDuelPause::Subtitles: Text = Mode.EffortSubtitles() ? TEXT("战斗语音字幕   开") : TEXT("战斗语音字幕   关"); break;
+            }
+            Label(Text, W * .5f, Row, 18.f * S, bSelected ? Ember : Ivory, true);
+        }
+        Label(TEXT("W / S 或 ↑ / ↓ 选择    F 确认    Esc 返回"), W * .5f, Y + (78.f + Count * 36.f) * S, 14.f * S, Ash, true);
+        return;
+    }
+
+    if (Outcome == EDuelOutcome::Ready)
+    {
+        DrawCompass(Mode, W, S);
+        const FVector At = Mode.GetPlayerFighter()->GetActorLocation();
+        const bool bRest = Mode.NearRestPoint();
+        const TCHAR* Prompt = nullptr;
+        if (Mode.NearGate())
+        {
+            Prompt = TEXT("F   打开雾门");
+        }
+        else if (Mode.NearWarrant())
+        {
+            Prompt = TEXT("F   取走通行文书");
+        }
+        else if (Mode.NearPrisonGate())
+        {
+            Prompt = Mode.HasWarrant() ? TEXT("F   用文书打开铁闸") : TEXT("铁闸锁着。去右侧禁闭室找通行文书。");
+        }
+        else if (bRest)
+        {
+            Prompt = TEXT("F   休息并记录进度");
+        }
+        else if (Mode.GateOpen())
+        {
+            Prompt = TEXT("向前走入雾门");
+        }
+        if (Prompt)
+        {
+            const float Width = 440.f * S;
+            Panel((W - Width) * .5f, H * .835f, Width, 43.f * S, S);
+            Label(Prompt, W * .5f, H * .835f + 9.f * S, 18.f * S, Ember, true);
+            return;
+        }
+        if (Mode.InAppeal())
+        {
+            Label(Mode.InYukiCourt() ? TEXT("前往终审庭，与月代雪对质") : TEXT("沿证人通道登上复审礼堂"),
+                W * .5f, H * .858f, 16.f * S, Ivory, true);
+            return;
+        }
+        if (!At.Equals(DuelCourt::LowerCheckpoint().GetLocation(), 190.0))
+        {
+            const TCHAR* Objective = Mode.PrisonGateOpen() ? TEXT("前往审讯庭雾门") : Mode.HasWarrant() ? TEXT("打开押送铁闸") :
+                (At.X < DuelCourt::StairTopX ? TEXT("登上押送阶梯") : TEXT("在右侧禁闭室找通行文书"));
+            Label(Objective, W * .5f, H * .858f, 16.f * S, Ivory, true);
+            return;
+        }
+        const float X = W * .055f;
+        const float Y = H * .19f;
+        Panel(X - 19.f * S, Y - 17.f * S, 418.f * S, 284.f * S, S);
+        Label(TEXT("魔女审判"), X, Y, 46.f * S, Ivory);
+        Label(TEXT("缺页证言  ·  开庭前夜"), X, Y + 53.f * S, 20.f * S, Ember);
+        Label(TEXT("案卷少了一页目击证词。"), X, Y + 89.f * S, 16.f * S, Ivory);
+        Label(TEXT("证人仍在禁闭室，审判席上没有她的位置。"), X, Y + 111.f * S, 16.f * S, Ivory);
+        Label(TEXT("沿押送阶梯上行，找出证词的签收存根。"), X, Y + 133.f * S, 16.f * S, Ivory);
+        DrawRect(Bronze, X, Y + 162.f * S, 354.f * S, 1.f);
+        Label(TEXT("WASD  前往押送阶梯"), X, Y + 174.f * S, 18.f * S, Ember);
+        Label(TEXT("长按 Shift 跑步   Space 跳跃"), X, Y + 205.f * S, 13.f * S, Ash);
+        Label(TEXT("Esc 配置角色与首领    G 查看模型"), X, Y + 225.f * S, 13.f * S, Ash);
+        return;
+    }
+
+    if (Outcome == EDuelOutcome::Victory)
+    {
+        const float Width = 510.f * S;
+        Panel((W - Width) * .5f, H * .84f, Width, 44.f * S, S);
+        const TCHAR* Prompt = Mode.InYukiCourt() ? TEXT("魔女之源已断  ·  穿过拱门前往晴庭") :
+            Mode.InAppeal() ? TEXT("魔女化已解除  ·  登上复审席传唤月代雪") :
+            TEXT("魔女化已解除  ·  穿过拱门去证物库");
+        Label(Prompt,
+            W * .5f, H * .84f + 9.f * S, 19.f * S, Ember, true);
+        return;
+    }
+    if (Outcome == EDuelOutcome::Passage)
+    {
+        Label(TEXT("沿证人回廊前往下一处复活点"), W * .5f, H * .862f, 16.f * S, Ivory, true);
+        return;
+    }
+    const float X = (W - 525.f * S) * .5f;
+    const float Y = H * .28f;
+    if (Outcome == EDuelOutcome::Epilogue)
+    {
+        if (Mode.ReadingArchive())
+        {
+            if (Mode.Choice() < 2)
+            {
+                const bool bHiro = Mode.GetPlayerFighter()->SelectedCharacter() == EDuelCharacter::Hiro;
+                const bool bPartner = Mode.Choice() == 0;
+                Panel(W * .5f - 330.f * S, H * .71f, 660.f * S, 123.f * S, S);
+                Label(bHiro == bPartner ? TEXT("艾玛") : TEXT("希罗"), W * .5f, H * .71f + 16.f * S, 20.f * S, Ember, true);
+                const TCHAR* Line = bPartner ? (bHiro ? TEXT("希罗酱，天亮了。我们一起回去吧。") :
+                    TEXT("艾玛，门开着。这一次，我们一起走。")) :
+                    (bHiro ? TEXT("好。以后下雨，我们就在家等天晴。") : TEXT("嗯。从今以后，下雨也不用害怕了。"));
+                Label(Line, W * .5f, H * .71f + 47.f * S, 17.f * S, Ivory, true);
+                Label(TEXT("F   继续"), W * .5f, H * .71f + 88.f * S, 14.f * S, Ash, true);
+                return;
+            }
+            const int32 Total = Mode.HearingsTime();
+            Panel(W * .5f - 304.f * S, Y, 608.f * S, 269.f * S, S);
+            Label(TEXT("在一个没有魔女的早晨"), W * .5f, Y + 26.f * S, 30.f * S, Ivory, true);
+            Label(TEXT("后来，世界再没有出现过魔女。"), W * .5f, Y + 78.f * S, 18.f * S, Ember, true);
+            Label(TEXT("艾玛和希罗搬到了离海很近的地方。"), W * .5f, Y + 113.f * S, 17.f * S, Ivory, true);
+            Label(TEXT("晴天一起去买苹果，下雨就留在家里。"), W * .5f, Y + 143.f * S, 17.f * S, Ivory, true);
+            Label(FString::Printf(TEXT("三场战斗  ·  用时 %02d:%02d"), Total / 60, Total % 60),
+                W * .5f, Y + 181.f * S, 14.f * S, Ash, true);
+            Label(TEXT("F   回到晴庭"), W * .5f, Y + 229.f * S, 16.f * S, Ember, true);
+        }
+        else
+        {
+            Label(Mode.NearGardenExit() ? TEXT("F   和她说话") : TEXT("往前走，去她身边"),
+                W * .5f, H * .855f, 19.f * S, Ivory, true);
+        }
+        return;
+    }
+    if (Outcome == EDuelOutcome::Archive)
+    {
+        const int32 Time = Mode.DuelSeconds();
+        const FString ResultLine = FString::Printf(TEXT("击败 %s    ·    用时 %02d:%02d"),
+            Mode.GetBossFighter()->CharacterName(), Time / 60, Time % 60);
+        if (Mode.ReadingArchive())
+        {
+            if (Mode.InAppeal())
+            {
+                const bool bReceipt = Mode.Ending() == EDuelEnding::SubmitReceipt;
+                const int32 Total = Time + Mode.FirstHearingSeconds();
+                Panel(X, Y, 525.f * S, 249.f * S, S);
+                Label(TEXT("月代雪的传唤"), W * .5f, Y + 21.f * S, 30.f * S, Ember, true);
+                Label(FString::Printf(TEXT("两人已解除魔女化  ·  用时 %02d:%02d"), Total / 60, Total % 60),
+                    W * .5f, Y + 69.f * S, 15.f * S, Ash, true);
+                Label(bReceipt ? TEXT("存根留在席上。艾玛划掉了自己名字旁的判词。") :
+                    TEXT("希罗撤回了原来的指控。她把笔交给艾玛。"), W * .5f, Y + 106.f * S, 16.f * S, Ivory, true);
+                Label(TEXT("月代雪：如果你们执意让魔女消失，就来终审庭。"), W * .5f, Y + 136.f * S, 16.f * S, Ivory, true);
+                Label(TEXT("F   合上笔录，穿过石案后方的门"), W * .5f, Y + 199.f * S, 16.f * S, Ember, true);
+            }
+            else if (Mode.Ending() == EDuelEnding::Undecided)
+            {
+                Panel(X, Y, 525.f * S, 259.f * S, S);
+                Label(TEXT("证物 07  ·  签收存根"), W * .5f, Y + 20.f * S, 30.f * S, Ember, true);
+                Label(ResultLine, W * .5f, Y + 66.f * S, 15.f * S, Ash, true);
+                Label(TEXT("目击证词在 22:41 签收。命案发生在 23:16。"),
+                    W * .5f, Y + 100.f * S, 17.f * S, Ivory, true);
+                Label(TEXT("封套里有两种墨迹。一种出自月代雪的钢笔。"),
+                    W * .5f, Y + 129.f * S, 17.f * S, Ivory, true);
+                const float Selected = W * .5f + (Mode.Choice() == 0 ? -107.f : 107.f) * S;
+                DrawRect(FLinearColor(.48f, .31f, .15f, .28f), Selected - 94.f * S, Y + 168.f * S, 188.f * S, 34.f * S);
+                Label(TEXT("呈交签收存根"), W * .5f - 107.f * S, Y + 173.f * S, 18.f * S, Mode.Choice() == 0 ? Ember : Ash, true);
+                Label(TEXT("申请传唤证人"), W * .5f + 107.f * S, Y + 173.f * S, 18.f * S, Mode.Choice() == 1 ? Ember : Ash, true);
+                Label(TEXT("W / S 或 ↑ / ↓ 选择    F 确认"), W * .5f, Y + 220.f * S, 14.f * S, Ash, true);
+            }
+            else
+            {
+                const bool bReceipt = Mode.Ending() == EDuelEnding::SubmitReceipt;
+                Panel(X, Y, 525.f * S, 228.f * S, S);
+                Label(bReceipt ? TEXT("审判笔录  ·  暂缓表决") : TEXT("审判笔录  ·  传唤许可"),
+                    W * .5f, Y + 20.f * S, 30.f * S, Ember, true);
+                Label(ResultLine, W * .5f, Y + 67.f * S, 15.f * S, Ash, true);
+                Label(bReceipt ? TEXT("签收时间被读进笔录，处刑表决暂缓。") :
+                    TEXT("传唤已准许。证人将在复审礼堂出席。"), W * .5f, Y + 96.f * S, 17.f * S, Ivory, true);
+                Label(bReceipt ? TEXT("把原件带进侧门，复核封套上的第二道印。") :
+                    TEXT("从石案左侧的门进入证人通道。"), W * .5f, Y + 125.f * S, 17.f * S, Ivory, true);
+                Label(TEXT("F   合上笔录"), W * .5f, Y + 183.f * S, 16.f * S, Ember, true);
+            }
+        }
+        else
+        {
+            const float Height = H * .807f;
+            Panel(W * .5f - 196.f * S, Height, 392.f * S, 77.f * S, S);
+            Label(ResultLine, W * .5f, Height + 12.f * S, 16.f * S, Ivory, true);
+            const TCHAR* Prompt = Mode.InAppeal()
+                ? (Mode.RitualMark() != INDEX_NONE ? TEXT("F   点亮证言烛台") :
+                    !Mode.RitualComplete() ? TEXT("依次点亮左席、右席、中央的烛台") :
+                    Mode.NearArchiveDesk() ? TEXT("F   听月代雪的传唤") : TEXT("穿过石案后方的门，前往终审庭"))
+                : Mode.NearAppealPassage() ? TEXT("F   前往证人通道")
+                : Mode.Ending() != EDuelEnding::Undecided ? TEXT("从石案左侧前往复审礼堂")
+                : Mode.NearArchiveDesk() ? TEXT("F   查阅证物 07 与胜利结算") : TEXT("到石案前查阅证物 07");
+            if (!Mode.InAppeal() && Mode.Ending() != EDuelEnding::Undecided && !Mode.NearArchiveDesk())
+            {
+                DrawCompass(Mode, W, S);
+            }
+            Label(Prompt,
+                W * .5f, Height + 39.f * S, 18.f * S, Ember, true);
+        }
+        return;
+    }
+    DrawRect(FLinearColor(.015f, .018f, .026f, .42f), 0, 0, W, H);
+    Panel(X, Y, 525.f * S, 204.f * S, S);
+    Label(TEXT("调查中断"), W * .5f, Y + 20.f * S, 35.f * S, Sakura, true);
+    Label(TEXT("F   回到复活点"), W * .5f, Y + 157.f * S, 18.f * S, Ember, true);
+}
+
+void ADuelHUD::DrawCompass(const ADuelMode& Mode, float W, float S)
+{
+    const ADuelFighter& Fighter = *Mode.GetPlayerFighter();
+    const FVector At = Fighter.GetActorLocation();
+    FVector Goal = (Mode.InYukiCourt() ? DuelCourt::YukiOrigin : Mode.InAppeal() ? DuelCourt::AppealOrigin : FVector::ZeroVector)
+        + FVector(DuelCourt::GateX, 0, 0);
+    if (Mode.Outcome() == EDuelOutcome::Archive)
+    {
+        Goal = DuelCourt::AppealPassage;
+    }
+    else if (!Mode.InAppeal() && !Mode.PrisonGateOpen())
+    {
+        Goal = Mode.HasWarrant() ? FVector(DuelCourt::PrisonGateX, 0, 0) :
+            At.X < DuelCourt::StairTopX ? FVector(DuelCourt::StairTopX + 100.f, 0, 0) : DuelCourt::Warrant;
+    }
+    const float Center = W * .5f;
+    const float Y = 32.f * S;
+    const double Yaw = PlayerOwner->PlayerCameraManager->GetCameraRotation().Yaw;
+    Chrome(0, Center - 148.f * S, Y - 8.f * S, 296.f * S, 20.f * S, FLinearColor(1, 1, 1, .80f));
+    DrawRect(FLinearColor(.56f, .46f, .31f, .72f), Center - 124.f * S, Y, 248.f * S, 1.f);
+    const TCHAR* Cardinal[] = {TEXT("北"), TEXT("东"), TEXT("南"), TEXT("西")};
+    for (int32 I = 0; I < 24; ++I)
+    {
+        const float Delta = FMath::FindDeltaAngleDegrees(Yaw, static_cast<double>(I * 15));
+        if (FMath::Abs(Delta) < 72.f)
+        {
+            const float X = Center + Delta * 1.65f * S;
+            DrawRect(I % 6 == 0 ? Bronze : Ash, X, Y, 1.f, (I % 6 == 0 ? 6.f : 3.f) * S);
+            if (I % 6 == 0)
+            {
+                Label(Cardinal[I / 6], X, Y - 21.f * S, 12.f * S, Ivory, true);
+            }
+        }
+    }
+    const float Offset = FMath::Clamp(static_cast<float>(FMath::FindDeltaAngleDegrees(Yaw, (Goal - At).Rotation().Yaw)), -72.f, 72.f);
+    Chrome(13, Center + (Offset * 1.65f - 8.f) * S, Y - 7.f * S, 16.f * S, 16.f * S, Ember);
+    if (PreviousZone == Mode.AreaName() && GetWorld()->GetTimeSeconds() - ZoneChangedAt >= 3.35)
+    {
+        Label(Mode.AreaName(), Center, Y + 15.f * S, 15.f * S, Ivory, true);
+    }
+}
+
+void ADuelHUD::DrawArea(const ADuelMode& Mode, float W, float H, float S)
+{
+    const FString Area = Mode.AreaName();
+    const double Now = GetWorld()->GetTimeSeconds();
+    if (PreviousZone != Area)
+    {
+        PreviousZone = Area;
+        ZoneChangedAt = Now;
+    }
+    const float Age = static_cast<float>(Now - ZoneChangedAt);
+    const bool bFighting = Mode.Outcome() == EDuelOutcome::Fighting;
+    const float Fade = bFighting ? FMath::SmoothStep(.91f, 1.8f, Age) : FMath::SmoothStep(2.25f, 3.35f, Age);
+    const float Alpha = FMath::SmoothStep(0.f, .42f, Age) * (1.f - Fade);
+    if (Alpha <= .01f || Mode.DialogueVisible())
+    {
+        return;
+    }
+    const float Y = H * (bFighting ? .125f : .20f);
+    Chrome(0, W * .5f - 177.f * S, Y - 8.f * S, 354.f * S, 60.f * S, FLinearColor(1, 1, 1, Alpha * .68f));
+    DrawRect(FLinearColor(.65f, .50f, .27f, Alpha * .69f), W * .5f - 137.f * S, Y + 37.f * S, 274.f * S, 1.f);
+    Label(Area, W * .5f, Y + 2.f * S, 24.f * S, FLinearColor(Ivory.R, Ivory.G, Ivory.B, Alpha), true);
+}
+
+void ADuelHUD::DrawCaption(const FString& Speaker, const FString& Line, float W, float H, float S, float Alpha)
+{
+    const float Center = W * .5f;
+    const float Width = FMath::Min(W * .68f, 630.f * S);
+    const float Size = 19.f * S;
+    const int32 MaxChars = FMath::Max(1, FMath::FloorToInt((Width - 36.f * S) / Size));
+    TArray<FString, TInlineAllocator<3>> Lines;
+    const FString Breaks(TEXT("，。？！、；： "));
+    for (int32 Start = 0; Start < Line.Len();)
+    {
+        int32 End = FMath::Min(Start + MaxChars, Line.Len());
+        if (End < Line.Len())
+        {
+            for (int32 Break = End - 1; Break > Start + MaxChars / 2; --Break)
+            {
+                if (Breaks.Contains(FString::Chr(Line[Break])))
+                {
+                    End = Break + 1;
+                    break;
+                }
+            }
+        }
+        Lines.Add(Line.Mid(Start, End - Start).TrimStartAndEnd());
+        Start = End;
+    }
+    const float Height = (29.f + 25.f * Lines.Num()) * S;
+    const float Y = H - 74.f * S - Height;
+    Chrome(0, Center - Width * .5f, Y, Width, Height, FLinearColor(1, 1, 1, .84f * Alpha));
+    DrawRect(FLinearColor(Bronze.R, Bronze.G, Bronze.B, .48f * Alpha),
+        Center - Width * .42f, Y, Width * .84f, 1.f);
+    Label(Speaker, Center, Y + 6.f * S, 13.f * S, FLinearColor(Ember.R, Ember.G, Ember.B, Alpha), true);
+    for (int32 Row = 0; Row < Lines.Num(); ++Row)
+    {
+        Label(Lines[Row], Center, Y + (26.f + Row * 25.f) * S, Size, FLinearColor(Ivory.R, Ivory.G, Ivory.B, Alpha), true);
+    }
+}
+
+void ADuelHUD::DrawHUD()
+{
+    Super::DrawHUD();
+    const ADuelMode* Mode = GetWorld()->GetAuthGameMode<ADuelMode>();
+    const ADuelFighter* Player = PlayerOwner ? Cast<ADuelFighter>(PlayerOwner->GetPawn()) : nullptr;
+    const ADuelFighter* Boss = Mode ? Mode->GetBossFighter() : nullptr;
+    if (!Canvas || !Player || !Boss)
+    {
+        return;
+    }
+    const float W = static_cast<float>(Canvas->SizeX);
+    const float H = static_cast<float>(Canvas->SizeY);
+    const float S = FMath::Clamp(FMath::Min(H / 720.f, W / 1060.f), .58f, 1.8f);
+    const EDuelOutcome Outcome = Mode->Outcome();
+    const bool bPaused = UGameplayStatics::IsGamePaused(this);
+    if (bPaused || Outcome == EDuelOutcome::Title)
+    {
+        DrawPrompt(*Mode, bPaused, W, H, S);
+        return;
+    }
+    if (Outcome == EDuelOutcome::Ready && Mode->CharacterView())
+    {
+        const bool bAlternate = Mode->CharacterView() == 2;
+        Panel(W * .13f, H - 82.f * S, W * .74f, 69.f * S, S);
+        Label(FString::Printf(TEXT("%s · %s"), Player->CharacterName(), bAlternate ? TEXT("四足") : TEXT("站立")),
+            W * .29f, H - 69.f * S, 21.f * S, Ivory, true);
+        Label(FString::Printf(TEXT("%s · %s"), Boss->CharacterName(), bAlternate ? TEXT("站立") : TEXT("四足")),
+            W * .73f, H - 69.f * S, 21.f * S, Ivory, true);
+        Label(TEXT("A / D 旋转     G 切换姿态     F 返回"), W * .5f, H - 37.f * S, 15.f * S, Ember, true);
+        return;
+    }
+    const float Delta = GetWorld()->GetDeltaSeconds();
+    const auto Trail = [Delta](float Health, float& Previous, float& Delayed)
+    {
+        Delayed = Health > Previous ? Health :
+            FMath::FInterpConstantTo(FMath::Max(Previous, Delayed), Health, Delta, .26f);
+        Previous = Health;
+        return Delayed;
+    };
+    const float Pad = 32.f * S;
+    if (Player->CanUseEquipment() && Outcome != EDuelOutcome::Epilogue)
+    {
+        Chrome(12, Pad, 31.f * S, 43.f * S, 43.f * S, Ivory);
+        Label(Player->CharacterName(), Pad + 52.f * S, 22.f * S, 17.f * S, Ivory);
+        DrawMeter(Pad + 52.f * S, 46.f * S, 308.f * S, 11.f * S, Player->HealthRatio(), Oxblood,
+            Trail(Player->HealthRatio(), PreviousHealth, HealthTrail));
+        DrawMeter(Pad + 52.f * S, 64.f * S, 248.f * S, 7.f * S, Player->FocusRatio(), Cerulean);
+        DrawMeter(Pad + 52.f * S, 78.f * S, 280.f * S, 6.f * S, Player->StaminaRatio(), Moss);
+        if (Player->IsGuardBroken() || Player->HasAegis())
+        {
+            Label(Player->IsGuardBroken() ? TEXT("盾防崩解") : TEXT("守证辉幕"), Pad + 52.f * S, 92.f * S, 15.f * S, Ember);
+        }
+        if (const float Offering = Player->RitualOfferingSeconds(); Offering > 0.f)
+        {
+            Label(FString::Printf(TEXT("献血仪式  %d 秒"), FMath::CeilToInt(Offering)),
+                Pad + 52.f * S, 114.f * S, 15.f * S, Ember);
+        }
+        DrawEquipment(*Player, H, S);
+    }
+    if (Outcome != EDuelOutcome::Fighting)
+    {
+        PreviousBossHealth = BossHealthTrail = 1.f;
+        DrawPrompt(*Mode, false, W, H, S);
+        if (Outcome == EDuelOutcome::Defeat)
+        {
+            if (const TCHAR* Line = Mode->CombatCaption())
+            {
+                DrawCaption(FString::Printf(TEXT("%s  ·  首领"), Boss->CharacterName()), Line, W, H, S, Mode->CaptionOpacity());
+            }
+        }
+        if (Outcome == EDuelOutcome::Archive && Mode->RitualComplete() && !Mode->ReadingArchive())
+        {
+            const float Alpha = Mode->RitualCaptionOpacity();
+            if (Alpha > 0.f)
+            {
+                DrawCaption(TEXT("大魔女 · 月代雪"), TEXT("你们想终止审判。那就走到我面前。"), W, H * .91f, S, Alpha);
+            }
+        }
+        if (Mode->CanExplore())
+        {
+            DrawArea(*Mode, W, H, S);
+        }
+        return;
+    }
+    Label(TEXT("Esc 暂停"), W - Pad - 66.f * S, 28.f * S, 13.f * S, Ash);
+    if (Mode->SilentBellActive())
+    {
+        Label(TEXT("止步  ·  钟声只追逐脚步"), W * .5f, H * .153f, 18.f * S, Ember, true);
+    }
+
+    const float BossW = FMath::Min(W * .60f, 815.f * S);
+    const float BossX = (W - BossW) * .5f;
+    const float BossY = H - 46.f * S;
+    const TCHAR* EmaPhases[] = {TEXT("幻形"), TEXT("魔女化 · 骨翼"), TEXT("魔女化 · 白烬")};
+    const TCHAR* HiroPhases[] = {TEXT("幻形"), TEXT("魔女化 · 绯影"), TEXT("魔女化 · 裂影")};
+    const TCHAR* YukiPhases[] = {TEXT("大魔女"), TEXT("魔女化 · 裂镜"), TEXT("魔女化 · 终审")};
+    const TCHAR* const* Phases = Boss->SelectedCharacter() == EDuelCharacter::Yuki ? YukiPhases :
+        Boss->SelectedCharacter() == EDuelCharacter::Ema ? EmaPhases : HiroPhases;
+    const TCHAR* Phase = Phases[Boss->Phase() - 1];
+    Label(FString::Printf(TEXT("%s · %s"), Boss->CharacterName(), Phase),
+        BossX, BossY - 32.f * S, 21.f * S, Ivory);
+    DrawMeter(BossX, BossY, BossW, 11.f * S, Boss->HealthRatio(), Boss->IsAwakened() ? Sakura : Oxblood,
+        Trail(Boss->HealthRatio(), PreviousBossHealth, BossHealthTrail));
+    Chrome(15, BossX - 20.f * S, BossY - 6.f * S, 19.f * S, 24.f * S);
+    Chrome(15, BossX + BossW + S, BossY - 6.f * S, 19.f * S, 24.f * S);
+    for (float Threshold : {DuelCourt::WingThreshold, DuelCourt::EclipseThreshold})
+    {
+        const float X = BossX + BossW * Threshold;
+        DrawRect(Ink, X - 1.f, BossY - 2.f * S, 3.f, 15.f * S);
+        Chrome(13, X - 5.f * S, BossY - 9.f * S, 10.f * S, 10.f * S, Ivory);
+    }
+    DrawMeter(BossX, BossY + 18.f * S, BossW, 4.f * S, Boss->PostureRatio(), Bronze);
+    const int32 RecentDamage = Boss->RecentDamage();
+    if (RecentDamage > 0)
+    {
+        const FString Value = FString::FromInt(RecentDamage);
+        Label(Value, BossX + BossW - (10.f + Value.Len() * 9.f) * S, BossY - 29.f * S, 18.f * S, Ivory);
+    }
+    if (Boss->IsStaggered())
+    {
+        Label(Boss->IsGuardReeling() ? TEXT("精准格挡 · 可反击") : TEXT("架势破绽"),
+            W * .5f, BossY - 27.f * S, 16.f * S, Ember, true);
+    }
+
+    if (const TCHAR* Line = Mode->CombatCaption())
+    {
+        DrawCaption(Mode->CaptionSpeaker(), Line, W, H, S, Mode->CaptionOpacity());
+    }
+    DrawArea(*Mode, W, H, S);
+    if (Player->IsLocked() && Boss->IsAlive())
+    {
+        const float Size = 26.f * S;
+        Chrome(2, (W - Size) * .5f, (H - Size) * .5f, Size, Size, FLinearColor(1, 1, 1, .76f));
+    }
+}

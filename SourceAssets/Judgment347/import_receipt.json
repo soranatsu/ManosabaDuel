@@ -1,0 +1,29 @@
+{
+  "SM_JudgmentCrown": {
+    "asset": "/Game/DuelArt/Judgment/SM_JudgmentCrown.SM_JudgmentCrown",
+    "half_extent_cm": [
+      48.45840072631836,
+      9.508066177368164,
+      52.249996185302734
+    ],
+    "material": "/Game/DuelArt/Judgment/M_JudgmentEnamel.M_JudgmentEnamel"
+  },
+  "SM_JudgmentEye": {
+    "asset": "/Game/DuelArt/Judgment/SM_JudgmentEye.SM_JudgmentEye",
+    "half_extent_cm": [
+      48.45840072631836,
+      10.299291610717773,
+      52.249996185302734
+    ],
+    "material": "/Game/DuelArt/Judgment/M_JudgmentEnamel.M_JudgmentEnamel"
+  },
+  "SM_JudgmentScales": {
+    "asset": "/Game/DuelArt/Judgment/SM_JudgmentScales.SM_JudgmentScales",
+    "half_extent_cm": [
+      48.45840072631836,
+      10.596292495727539,
+      52.249996185302734
+    ],
+    "material": "/Game/DuelArt/Judgment/M_JudgmentEnamel.M_JudgmentEnamel"
+  }
+}

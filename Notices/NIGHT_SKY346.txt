@@ -1,0 +1,16 @@
+North Tower 3.4.6 night sky and garden view
+
+MilkyWay346.png and CloudField346.png are original deterministic procedural game artwork, seed 34663103. The stars, galactic band, dust lanes and colours are an artistic composition, not an observed star catalogue or astronomical measurement.
+
+Source generator: Project/Content/Python/bake_night_sky346.py
+Editor importer: Project/Content/Python/import_night_sky346.py
+Original PNGs, SHA-256 manifest and import receipt: Project/SourceAssets/NightSky346/
+Runtime assets: /Game/DuelArt/NorthTower/NightSky346/
+
+The moon reuses the credited NASA SVS/LRO-LROC lroc_color_2k.jpg map. Retain RESCUE_AND_SKY_ASSETS.txt for its original provenance and media-guideline links. This revision adds no external galaxy photograph or library.
+
+The galactic plane rises from yaw/elevation (-30,-4) degrees to (30,38) degrees; its composed core is near (-9,15.2). The moon is at (380000,35000,100000) centimetres, diameter 14000 centimetres, about 14.4 degrees above the garden horizon and slightly right of the main approach. The cloud silver direction uses the same moon position relative to sea level.
+
+The normal exploration camera smoothly rises from its indoor -15 degree pitch to +2 degrees while crossing the final covered bridge onto the garden. Deliberate manual vertical look cancels this guidance. Combat camera logic and lower-floor views retain their existing behavior.
+
+Acceptance includes NightSky and GardenCamera automation plus real Player.CalcCamera render sequences at the ordinary exit and cliff. A separate 17-frame sequence walks from FinalExit through the covered bridge into DawnGarden using the production character movement component. GPU captures use -d3d12 -sm6 -DisableAsyncCompute. Final art and source scripts are retained independently from the frozen 3.4.5 version.

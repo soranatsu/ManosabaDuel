@@ -1,0 +1,16 @@
+North Tower 3.4.5 night sky
+
+MilkyWay345.png and CloudField345.png are original deterministic procedural game artwork, seed 34563103. The star distribution, galactic band, dust lanes, colours and placement are artistic composition, not an observational star catalogue or an astronomical measurement.
+
+Source generator: Project/Content/Python/bake_night_sky345.py
+Editor importer: Project/Content/Python/import_night_sky345.py
+Original PNGs, SHA-256 manifest and import receipt: Project/SourceAssets/NightSky345/
+Runtime assets: /Game/DuelArt/NorthTower/NightSky345/
+
+The moon reuses the retained NASA SVS/LRO-LROC lroc_color_2k.jpg surface map. Its original provenance and NASA media guideline links remain in RESCUE_AND_SKY_ASSETS.txt; no new external photograph or library was added.
+
+Runtime rendering uses one opaque unlit star sphere, one unlit moon sphere and one translucent cloud sphere. Clouds use two panned density samples, with no runtime fractal loops, volumetric cloud rendering, extra lights, capture cameras or per-frame CPU updates. Emissive colour compensates for scene exposure so the field stays legible without changing interior or exterior lighting.
+
+The moon is at (380000,-38000,17000) cm with a 14000 cm diameter. From the garden it is about 5.8 degrees left of +X and 2 degrees above the horizon, clear of the upper-left health panel. The star sphere is outside the full 65 km ocean extent. The cloud shell lies in front of the moon and reaches the horizon, replacing high flat sheets that were outside ordinary player views.
+
+Acceptance: NightSky automation checks unique material loads, one sphere per layer, no collision/shadows, ocean clearance and the full moon inside the 68-degree 16:9 default (-15 pitch) and level garden frames. Rendered player-camera captures and 0/2/4-second cloud frames verify appearance and motion. NullRHI import/automation does not verify final GPU pixels.

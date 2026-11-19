@@ -1,0 +1,11 @@
+{
+  "assets": [
+    "/Game/DuelArt/NorthTower/NightSky346/T_NorthMilkyWay346.T_NorthMilkyWay346",
+    "/Game/DuelArt/NorthTower/NightSky346/T_NorthCloudField346.T_NorthCloudField346",
+    "/Game/DuelArt/NorthTower/NightSky346/M_NorthNightSky346.M_NorthNightSky346",
+    "/Game/DuelArt/NorthTower/NightSky346/M_NorthMoonlitClouds346.M_NorthMoonlitClouds346",
+    "/Game/DuelArt/NorthTower/NightSky346/M_NorthMoon346.M_NorthMoon346"
+  ],
+  "moon_source": "/Game/DuelArt/NorthTower/Rescue/Textures/T_NorthLRO_Moon.T_NorthLRO_Moon",
+  "runtime_draws": "one opaque night sphere, one moon sphere, one translucent cloud sphere"
+}

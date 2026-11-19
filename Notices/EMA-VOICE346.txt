@@ -1,0 +1,6 @@
+3.4.6 replaces the two legacy Ema attack recordings with the original game voice line
+0201Trial08_Ema022 (Japanese performance, index subtitle 呀……！？).
+Scene: Act 2, chapter 1, trial 08. Hiro's preceding line 0201Trial08_Hiro033 calls Ema
+a barking dog; the next utterance belongs to Ema alone. Source and processed SHA-256 and
+PCM CRC32 are recorded in COMBAT_VOICE_PROVENANCE346.json. No crowd or stage audio is used.
+Source index: https://github.com/QwQSakuya/Manosaba-Library
