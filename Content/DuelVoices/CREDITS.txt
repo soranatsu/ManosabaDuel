@@ -1,0 +1,36 @@
+北塔 3.4.6 当前录音
+
+艾玛的普通攻击现使用原作 0201Trial08_Ema022（希罗说完“乱叫的笨狗”后艾玛的反应），时长0.392秒。当前23段录音共35.39秒，详见 COMBAT_VOICE_PROVENANCE346.json。旧版使用过的活动现场声音已退出全部艾玛攻击路由。
+
+以下为历版来源记录。
+
+月代雪配音 · Yuki Tsukishiro
+
+Yuki_Witch.wav、Yuki_Defeat.wav、Yuki_Loss.wav 是本作原创台词。使用
+Open JTalk 的 HTS Mei 音源合成，经过停顿编辑、采样率转换、首尾淡化和音量调整。
+
+Mei voice © 2009–2013 Nagoya Institute of Technology, Department of Computer
+Science. Released by the MMDAgent Project Team under CC BY 3.0.
+https://creativecommons.org/licenses/by/3.0/
+https://github.com/r9y9/pyopenjtalk/blob/master/pyopenjtalk/htsvoice/LICENSE_mei_normal.htsvoice
+
+北塔 3.4.4 新录音
+
+North_Hiro_*、North_Ema_*（Kiang 除外）、North_Yuki_* 为按原作逐句编号
+定位的游戏录音，由非官方“大魔女图书馆”公开索引提供检索入口。
+原作录音版权归 Re,AER / Acacia 等原权利人所有；第三方站点的代码许可
+不覆盖这些录音，本说明不主张新增再发行授权。
+https://github.com/QwQSakuya/Manosaba-Library
+
+North_Ema_Kiang.wav 为另行核验的 WePlay 现场反应，并非原作实机录音。
+https://www.bilibili.com/video/BV1PwUnBpERU/
+https://acacia-create.com/558/post-558/
+
+North_Yuki_* 与上文三个 HTS Mei 旧剧情文件分别记录。详细编号、来源、
+处理和核验结果见 COMBAT_VOICE_SOURCES344.md 与 COMBAT_VOICE_PROVENANCE344.json。
+
+北塔 3.4.5 新增8段同一原作逐句索引来源的录音，用于希罗克制战技、
+希罗/艾玛自身落败，以及三名Boss的事件候补。原始OGG在Originals345/，
+详细编号、台词、角色、裁切、来源、ASR与文件校验见
+COMBAT_VOICE_SOURCES345.md与COMBAT_VOICE_PROVENANCE345.json。
+旧希罗「我不会放弃你！」已退出当前北塔运行路由。本条历史记录对应345清单；现行验证脚本核验346清单。

@@ -1,0 +1,27 @@
+{
+  "rights": "Original character art: Re,AER LLC./Acacia. Public indexing is distinct from redistribution permission.",
+  "portraits": [
+    {
+      "character": "Ema",
+      "runtime_file": "Content/DuelPortraits/Ema/Smile.png",
+      "sha256": "f9aef4f9acb0964fc074e27cae15dd13bba52a6c25e71b4be68b138853eacd2e",
+      "visual": "Original mouth corners raised; inspected in CurrentFaces.png. No redrawing, synthesis or facial edits.",
+      "source_page": "https://acacia.wiki.gg/wiki/File:Ema_08.png",
+      "source_url": "https://acacia.wiki.gg/images/Ema_08.png?63b415",
+      "source_class": "Third-party original-game-art index, not an official redistributable asset pack",
+      "source_record_sha256": "3ead156b49697271486e7025ee59b881276e84711a113fa85b0025226dcb4328",
+      "operation": "Byte-for-byte canonical half-body PNG from the retained original-art preparation."
+    },
+    {
+      "character": "Hiro",
+      "runtime_file": "Content/DuelPortraits/Hiro/Smile.png",
+      "sha256": "cf8dd00dad8ba8e34f3792742aa26177cf3ef1393f896b5be9242e1947399c77",
+      "visual": "Original mouth corners raised; inspected in CurrentFaces.png. No redrawing, synthesis or facial edits.",
+      "source_page": "https://acacia.wiki.gg/wiki/File:Hiro_01.png",
+      "source_url": "https://acacia.wiki.gg/images/Hiro_01.png?c84d02",
+      "source_class": "Third-party original-game-art index, not an official redistributable asset pack",
+      "source_record_sha256": "3ead156b49697271486e7025ee59b881276e84711a113fa85b0025226dcb4328",
+      "operation": "Byte-for-byte canonical half-body PNG from the retained original-art preparation."
+    }
+  ]
+}
