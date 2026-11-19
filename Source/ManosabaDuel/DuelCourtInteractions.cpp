@@ -74,6 +74,7 @@ void ADuelArena::CompleteCourtCounter()
     JudgmentBarrier.Reset();
     CourtStage = ECourtStage::Feedback; // Remove immunity before awarding the real punish window.
     Boss->DamagePosture(DuelCourt::MaxPosture);
+    if (Boss->Move == EDuelMove::Stagger) Boss->StaggerDurationScale = 2.f;
     CourtFeedback = TEXT("三枚判印已破 · 现在反击！");
     CourtFeedbackUntil = CourtClock + 2.5f;
     NextCourtCycle = CourtClock + 11.f;

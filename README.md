@@ -2,9 +2,13 @@
 
 《魔法少女的魔女审判》的非官方二创动作游戏。艾玛和希罗在北塔的牢房里失散了。沿着生活区、档案室和镜厅往上走，找回魔女化的同伴，并在终审厅面对小雪。
 
-**[下载 Windows 游玩版](https://github.com/soranatsu/ManosabaDuel/releases/latest)**。完整解压后打开 `NorthTower-3.4.7`，双击 `ManosabaDuel.exe`。关闭硬件光追可用同目录下的 `ManosabaDuel-NoRay.exe`。操作、存档和低显存设置见随包的《先读我》。
+**[下载 Windows 游玩版](https://github.com/soranatsu/ManosabaDuel/releases/latest)**。完整解压后打开 `NorthTower-3.4.8`，双击 `ManosabaDuel.exe`。关闭硬件光追可用同目录下的 `ManosabaDuel-NoRay.exe`。操作、存档和低显存设置见随包的《先读我》。
 
-## 3.4.7 的两场机关战
+## 3.4.8 热修
+
+小雪的三枚判印全部正确击破后，失衡持续时间在3.4.7基础上翻倍。移动封锁一秒、武器与施法封锁五秒，以及其他机关时长保持原设定。
+
+## 3.4.8 的两场机关战
 
 地牢里的诅咒悬链会锁住同伴。站到悬链另一侧，引飞矛沿预警射线穿过链芯，在飞矛到达前横向翻滚。两条链可以按任意顺序击断，同时断开后有三秒反击机会。飞矛击断第一条链后仍会继续飞行。
 

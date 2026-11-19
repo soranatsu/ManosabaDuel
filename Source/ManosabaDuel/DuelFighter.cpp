@@ -1140,6 +1140,7 @@ bool ADuelFighter::StartMove(EDuelMove Next, EDuelHand Hand)
     }
     QueuedMove = EDuelMove::Idle;
     MoveAge = PreviousWave = 0.f;
+    StaggerDurationScale = 1.f;
     bImpactPlayed = bHitDelivered = bTrackingBlade = false;
     ArtHeldTime = 0.f;
     bChargedArt = false;
@@ -1522,7 +1523,8 @@ void ADuelFighter::TickMove(float DeltaSeconds)
     const FVector BeforeTravel = GetActorLocation();
     FVector BladeSweepFrom = BeforeTravel;
     float BladeSweepAge = LastAge;
-    MoveAge = bProjectileSequence ? MoveAge + DeltaSeconds : FMath::Min(MoveAge + DeltaSeconds, Spec.Total());
+    const float MoveDelta = Current == EDuelMove::Stagger ? DeltaSeconds / StaggerDurationScale : DeltaSeconds;
+    MoveAge = bProjectileSequence ? MoveAge + MoveDelta : FMath::Min(MoveAge + MoveDelta, Spec.Total());
     const float HoldExtension = !bBoss && Current == EDuelMove::Crimson ? DuelCourt::ChargeExtension(MoveWeapon, MoveArt) : 0.f;
     if (HoldExtension > 0.f && bArtHeld && LastAge < Spec.Windup)
     {

@@ -417,6 +417,7 @@ private:
     EDuelCharacter Character = EDuelCharacter::Hiro;
     EDuelItem Item = EDuelItem::Flask;
     float MoveAge = 0.f;
+    float StaggerDurationScale = 1.f;
     float Health = DuelCourt::PlayerMaxHealth;
     float DamageBurst = 0.f;
     double DamageBurstUntil = 0.0;
