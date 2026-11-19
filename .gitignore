@@ -1,0 +1,17 @@
+/Saved/
+/DerivedDataCache/
+/Intermediate/
+/Binaries/
+/.vs/
+/.idea/
+*.sln
+*.suo
+*.user
+*.sdf
+/Archive/
+/Stage/
+/Verification/
+/IndependentExtract/
+*.sav
+.env
+.env.*

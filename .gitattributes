@@ -1,0 +1,7 @@
+# Preserve the byte-identical verified project snapshot on Windows and Unix.
+* -text
+*.uasset binary
+*.umap binary
+*.wav binary
+*.png binary
+*.otf binary
